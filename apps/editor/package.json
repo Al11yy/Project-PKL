@@ -8,9 +8,11 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@rakit/schema": "*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^4.6.7",
@@ -19,13 +21,13 @@
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
+    "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.20",
     "playwright": "^1.65.1",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
     "typescript": "^7.0.2",
-    "vite": "^5.4.8",
-    "vitest": "^2.1.9"
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
   }
 }
