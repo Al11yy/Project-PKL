@@ -1,93 +1,154 @@
 # AI-First App Builder for Indonesia — Project Structure & Patterns
 
-> **Status**: **No source code exists yet.** The tree below is the *target* layout to
-> create, consistent with the Express + Vite decision. Do not cite these paths as if
-> they exist — verify with glob before referencing them in a blueprint.
+> **Regenerated from code on 2026-07-15.** The previous version described a target tree
+> that did not exist. The editor portion below is now the **actual** tree; the backend
+> portion is still aspirational and marked as such.
 
-## Directory Layout (target)
+## Directory Layout (actual)
 
 ```
-.
-├── prd_ai_first_app_builder.md      The PRD — current source of truth for requirements
+D:\PKL\Project
 ├── .amanah/
 │   ├── atlas/                       Project context maps (this folder)
-│   ├── blueprints/{feature-name}/   Generated what/how/now or fix.md
-│   └── commands/, SKILL.md, AGENT.md  Framework install sources
+│   ├── blueprints/                  ** does not exist yet **
+│   ├── commands/, SKILL.md, AGENT.md  Framework install sources
 ├── .claude/
-│   ├── commands/                    Installed slash commands
-│   ├── skills/amanah-blueprint/     Skill (to be installed by /setup)
-│   ├── skills/amanah-atlas-generator/
-│   └── agents/amanah-blueprint-generator.agent.md
+│   ├── commands/                    Installed slash commands (12)
+│   ├── agents/                      4 impeccable agents
+│   └── skills/impeccable/           Skill + reference docs + scripts
+├── .impeccable/
+│   └── surfaces/editor-builder.md   Surface spec
 ├── apps/
-│   ├── editor/                      Vite + React + Tailwind + Zustand (Cloudflare Pages)
-│   │   └── src/
-│   │       ├── components/impeccable/   Strict component library
-│   │       ├── mapper/                  JSON → React component tree
-│   │       ├── editor/                  Fallback (click-to-edit) editor
-│   │       └── store/                   Zustand stores
-│   └── orchestrator/                Express.js (auth, coins, LLM-Kita, Cloudflare API)
-│       └── src/
-│           ├── routes/              Router layer
-│           ├── services/            Business logic (llm, coins, cloudflare)
-│           ├── db/                  Platform database + migrations
-│           └── prompts/             System prompts forcing strict JSON component output
-├── packages/
-│   ├── schema/                      Shared Zod schemas: LLM JSON contract, PRD shapes
-│   └── generator/                   DDL + Worker source generation templates
-└── templates/
-    └── worker/                      Template deployed per user project
+│   └── editor/                      ** THE ONLY APP **
+│       ├── .shots/                  Playwright harness + screenshots (png gitignored)
+│       │   ├── verify.mjs           overflow + console errors at 3 widths
+│       │   ├── flow.mjs             free-inspect / fail+refund / publish
+│       │   └── shot.mjs             screenshots
+│       ├── dist/                    build output (gitignored)
+│       ├── src/
+│       │   ├── App.tsx              Shell composition + view switch
+│       │   ├── main.tsx             React root
+│       │   ├── index.css            Tailwind layers + base/browser surfaces
+│       │   ├── components/
+│       │   │   ├── shell/           TopBar, Pipeline, PromptRow, Rail
+│       │   │   ├── preview/         Preview (+ NavBlock/StatBlock/TableBlock inline)
+│       │   │   ├── inspector/       Inspector — the free visual editor
+│       │   │   ├── views/           SchemaView, LedgerView
+│       │   │   └── ui/              Button, Icons, Toasts
+│       │   ├── lib/
+│       │   │   ├── types.ts         Domain contracts + COIN_COST + PIPELINE
+│       │   │   └── seed.ts          Synthetic demo data
+│       │   └── store/
+│       │       └── useBuilder.ts    ALL state + ALL actions
+│       ├── index.html
+│       ├── tailwind.config.js       Design tokens
+│       ├── vite.config.ts           port 5180, strictPort
+│       └── tsconfig.json
+├── scripts/
+│   ├── sync-confluence.mjs          Docs → Confluence (dry run by default)
+│   └── README-confluence.md
+├── CLAUDE.md, PRODUCT.md, KNOWLEDGE_BASE.md, TODO.md
+├── prd_ai_first_app_builder.md      Requirements source of truth
+└── .gitignore
 ```
 
-## Code Patterns (intended — enforce from day one)
+### Planned but not created
 
-### Component Mapper Pattern
-AI output is untrusted data. Validate, then map. Never `eval`, never `dangerouslySetInnerHTML`.
+Do not cite these as existing. Create them only when their blueprint is approved.
+
+```
+apps/orchestrator/          Express.js — auth, coins, LLM-Kita, Cloudflare API
+packages/schema/            Shared Zod contracts (LLM JSON, PRD shapes)
+packages/generator/         DDL + Worker source templates
+templates/worker/           Per-project Worker template
+apps/editor/src/components/impeccable/   Whitelisted component library
+apps/editor/src/mapper/                  Should be extracted from Preview.tsx
+```
+
+## Code Patterns Actually In Use
+
+### Single-store pattern
+
+All state and behaviour live in `apps/editor/src/store/useBuilder.ts`. There is no service
+layer. Components read via selectors and call actions directly:
 
 ```ts
-// intended shape
-const parsed = llmResponseSchema.parse(rawJson);   // Zod — throws on hallucinated tags
-const tree = parsed.nodes.map(toImpeccableComponent); // whitelist lookup, unknown => reject
+const view = useBuilder((s) => s.view)
+const balance = useBuilder((s) => s.balance())
+const topUp = useBuilder((s) => s.topUp)
 ```
 
-### Service Pattern
-Route handlers stay thin; all decisions live in services so the same logic can later
-move into Workers unchanged.
+Selectors that compute (`balance()`, `activeProject()`) are **called**, not read — they are
+functions on the state object, deliberately, so the balance is never a cacheable stored value.
+
+### Derived balance — do not break this
 
 ```ts
-// routes/generate.ts
-router.post('/generate', requireAuth, async (req, res, next) => {
-  const result = await llmService.generatePrd(req.user.id, req.body.prompt);
-  res.status(201).json(result);
-});
+// useBuilder.ts
+const STARTER_BALANCE_BASE = STARTER_BALANCE - SEED_LEDGER.reduce((s, e) => s + e.coins, 0)
+const balanceOf = (ledger) => ledger.reduce((sum, e) => sum + e.coins, STARTER_BALANCE_BASE)
 ```
 
-### DDL Generation Pattern
-Build DDL from the validated schema object with an allowlist of column types and
-identifier sanitization. **Never** interpolate the user's prompt into SQL.
+`STARTER_BALANCE_BASE` auto-adjusts as seed entries change, so the demo always reconciles
+to `STARTER_BALANCE` (128). Never introduce a stored `balance` field to "simplify" this.
 
-## API Response Format (intended)
+### Block-kind switch (a mapper in embryo)
 
-```json
-{ "data": { }, "error": null }
-{ "data": null, "error": { "code": "INSUFFICIENT_COINS", "message": "...", "details": { "required": 10, "balance": 3 } } }
+`ScreenView` in `Preview.tsx` branches on `block.kind`. This is the JSON-to-component
+mapper, but unvalidated and partial — see Gotchas.
+
+```ts
+const nav = screen.blocks.find((b) => b.kind === 'navbar')
+const stats = screen.blocks.filter((b) => b.kind === 'stat')
+const rest = screen.blocks.filter((b) => b.kind !== 'navbar' && b.kind !== 'stat')
 ```
+
+### Free-edit invariant
+
+`updateBlock` (`useBuilder.ts`) maps over `projects` only. It never touches `ledger`. Any
+refactor of the inspector must keep the ledger out of that code path — this is a product
+promise, not an implementation detail.
+
+### Thin-simulation seam
+
+`runGeneration`, `runRevision`, `runPublish`, `topUp` are the four functions that fake
+network calls with `setTimeout`. When the orchestrator lands, these are the functions to
+replace. Nothing else in the editor knows the backend does not exist.
 
 ## Critical Rules
 
-1. All LLM output is validated by Zod before it touches React state.
-2. Coin deduction completes before the LLM call; failed calls are refunded/not charged.
-3. Every Cloudflare resource is namespaced per project id (D1 name, Worker name, Pages project).
-4. Generated SQL identifiers are sanitized; no dynamic SQL from prompt text.
+1. All LLM output must be validated by Zod before it touches React state. **Not yet true** —
+   no Zod in the codebase, and no LLM to validate. Add the schema before adding the call.
+2. Coin deduction completes before the LLM call; failed calls are refunded. **True in
+   memory**, not guaranteed against concurrency or process death.
+3. Every Cloudflare resource namespaced per project id (D1 name, Worker name, Pages project).
+4. Generated SQL identifiers sanitized; no dynamic SQL from prompt text.
 5. Secrets live in env / Cloudflare secrets only.
+6. Every external call has an explicit timeout. (`scripts/sync-confluence.mjs` implements
+   this at 20s; the editor makes no external calls.)
+
+## Gotchas Discovered From Reading The Code
+
+| Gotcha | Detail |
+|--------|--------|
+| **Three block kinds never render** | `BlockKind` declares `form`, `card`, `chart`, but `Preview.tsx` renders only `navbar`, `stat`, `table`. Seed data uses only those three. `form`/`card`/`chart` are dead type surface — a real gap, since the PRD lists Form and Card as core components. |
+| **No router** | `App.tsx` switches on `view` from the store. No URL can address a view; reload loses everything. |
+| **All state is ephemeral** | No persistence of any kind. Refresh resets to seed. |
+| **Tailwind has no "project name truncation" guard** | `TopBar` hides meta below 1400px so the name stays whole; lowering that breakpoint re-introduces truncation at 1280px. |
+| **Port is pinned** | `vite.config.ts` uses `strictPort: true` on 5180. A stale server causes "Port already in use", not a fallback port. |
+| **`hasGenerated` starts `true`** | `useBuilder.ts` initialises it `true`, so a fresh session shows a finished app rather than an empty state. Intentional for the demo, misleading for a real new user. |
+| **Screenshot output must stay gitignored** | `.gitignore` uses `**/.shots/*.png` — the `**/` prefix is required, because a slash-containing pattern is anchored to the `.gitignore`'s own directory. |
 
 ## Key File Locations
 
 | Need to… | Look at |
 |----------|---------|
 | Change what the product must do | `prd_ai_first_app_builder.md` |
-| Change the LLM JSON contract | `packages/schema/` |
-| Change available UI components | `apps/editor/src/components/impeccable/` |
-| Change coin pricing | `apps/orchestrator/src/services/coins/` (to be created) |
-| Change system prompt constraints | `apps/orchestrator/src/prompts/` (to be created) |
-| Change D1/Worker deploy logic | `apps/orchestrator/src/services/cloudflare/` (to be created) |
+| Change UI copy or component behaviour | `apps/editor/src/components/` |
+| Change coin prices or domain types | `apps/editor/src/lib/types.ts` (`COIN_COST`) |
+| Change ledger behaviour or run actions | `apps/editor/src/store/useBuilder.ts` |
+| Change the demo data | `apps/editor/src/lib/seed.ts` |
+| Change design tokens | `apps/editor/tailwind.config.js` |
+| Understand the system as built | `KNOWLEDGE_BASE.md` |
+| See what is next | `TODO.md` |
 | Read project context | `.amanah/atlas/*.md` |

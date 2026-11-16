@@ -1,93 +1,149 @@
 # AI-First App Builder for Indonesia — Technology Stack
 
-> **Status**: Target architecture from `prd_ai_first_app_builder.md`, with two open PRD
-> choices resolved: **Express.js** (not NestJS) for the backend, **Vite + React SPA**
-> (not Next.js) for the frontend editor. No dependency files exist yet — versions below
-> are the intended baseline and must be pinned when the repo is scaffolded.
+> **Regenerated from code on 2026-07-15.** The previous version described a target
+> architecture with no code. The editor now exists; the backend still does not. Both are
+> stated below and marked accordingly.
 
-## Core Stack
+## Stack As Built
 
-| Layer | Choice | Role |
-|-------|--------|------|
-| Language | Node.js (LTS, TypeScript) | Orchestrator, API, billing |
-| Frontend editor | React 18 + **Vite** + Tailwind CSS | Prompt UI, canvas, Fallback Editor |
-| State | Zustand | JSON→component mapping, editor state |
-| Backend core | **Express.js** | Auth, coin ledger, LLM orchestration |
-| AI engine | **API LLM-Kita** | Prompts optimized for strict JSON output |
-| Frontend hosting | Cloudflare Pages | Static build of the editor (and published apps) |
-| Backend compute | Cloudflare Workers | Generated per-project REST CRUD APIs |
-| Database | Cloudflare D1 (serverless SQLite) | Per-project generated schemas |
-| Payments | Midtrans (QRIS, Virtual Account) | Coin top-ups in IDR |
+| Layer | Choice | State | Evidence |
+|-------|--------|-------|----------|
+| Language | TypeScript | Built | `apps/editor/tsconfig.json` |
+| Frontend editor | React 18 + Vite 5 + Tailwind 3 | **Built** | `apps/editor/package.json` |
+| State | Zustand 4 | **Built** | `apps/editor/src/store/useBuilder.ts` |
+| Routing | none — state-driven | **Built** | `App.tsx` switches on `view` |
+| E2E harness | Playwright | **Built** | `apps/editor/.shots/{verify,flow,shot}.mjs` |
+| Backend core | Express.js | **Not built** | — |
+| AI engine | API LLM-Kita | **Not built** | — |
+| Database | Cloudflare D1 | **Not built** | — |
+| Compute | Cloudflare Workers | **Not built** | — |
+| Payments | Midtrans | **Not built** | — |
+
+Exact frontend versions from `package.json`: React `^18.3.1`, Zustand `^4.5.5`,
+Vite `^5.4.8`, Tailwind `^3.4.13`, TypeScript `^7.0.2`, Playwright `^1.65.1`.
+
+Dev server runs on **port 5180 with `--strictPort`** (`vite.config.ts`). Two instances
+cannot coexist; a second `npm run dev` exits with "Port 5180 is already in use".
 
 ## Databases
 
-- **D1 (SQLite dialect)**: the *end user's* generated app data, one database per
-  published project. DDL is executed at schema-approval time.
-- **Platform database** (for platform users, coin ledger, session context, generated
-  project metadata): **not specified in the PRD** — see Open Decisions. Assume
-  D1 or Postgres-on-Hyperdrive; do not assume SQLite-only syntax without confirming.
-- Note: D1 has **no `SERIAL`**, no sequences, and limited `ALTER TABLE` support. Any
-  generated DDL must use `INTEGER PRIMARY KEY AUTOINCREMENT` or ULID/TEXT ids, and
-  schema changes need a table-rebuild strategy rather than `ALTER COLUMN`.
+Nothing is persisted. There is no database, local or remote.
+
+- **D1 (SQLite dialect)**: intended for the *end user's* generated app data, one database
+  per published project. Not provisioned.
+- **Platform database** (users, coin ledger, session context, project metadata):
+  **still not chosen.** Assume D1 or Postgres-on-Hyperdrive; do not assume SQLite-only
+  syntax without confirming.
+- D1 constraints that will bite when DDL generation is written: no `SERIAL`, no sequences,
+  limited `ALTER TABLE`. Use `INTEGER PRIMARY KEY AUTOINCREMENT` or ULID/TEXT ids, and
+  rebuild tables rather than `ALTER COLUMN`.
+
+The in-memory ledger shape in `apps/editor/src/lib/types.ts` is the closest thing to a
+schema contract today, and it should inform the eventual table:
+
+```ts
+interface LedgerEntry {
+  id: string
+  at: string
+  label: string
+  detail: string
+  coins: number      // negative = out, positive = in/refund
+  outcome: 'spent' | 'free' | 'refunded' | 'failed'
+  refId: string      // binds a debit to its refund
+}
+```
 
 ## External Services
 
-| Service | Purpose | Failure Mode |
-|---------|---------|--------------|
-| API LLM-Kita | Prompt → PRD + JSON schema + component tree | No response → no coins burned, return retry prompt |
-| Midtrans | QRIS / VA top-ups | Webhook is the only source of truth for crediting coins |
-| Cloudflare API | Create D1 databases, deploy Pages/Workers | Partial deploy (D1 created, Worker failed) must be recoverable |
+| Service | Purpose | Failure Mode | State |
+|---------|---------|--------------|-------|
+| API LLM-Kita | Prompt → PRD + JSON schema + component tree | No response → no coins burned, return retry prompt | Not integrated |
+| Midtrans | QRIS / VA top-ups | Webhook is the only source of truth for crediting coins | Not integrated |
+| Cloudflare API | Create D1 databases, deploy Pages/Workers | Partial deploy (D1 created, Worker failed) must be recoverable | Not integrated |
+
+Every simulated operation in the editor is a `setTimeout` chain in
+`store/useBuilder.ts`: generation is 5 steps × 700 ms, revision 1,600 ms, publish
+3 steps × 900 ms. These durations are invented and carry no meaning.
 
 ## Key Libraries
 
-- `zod` — validate LLM JSON output before it reaches the mapper (LLM output is untrusted).
-- `zustand` — editor state.
-- `tailwindcss` — Impeccable Style implementation.
-- `@cloudflare/workers-types`, `wrangler` — Workers/D1 deploys.
-- `midtrans-client` — payment snap/VA integration.
-- `react-hook-form` — generated forms can be Formik-free; keep it simple.
+**Installed:** `react`, `react-dom`, `zustand`, `tailwindcss`, `vite`, `typescript`,
+`playwright`, `autoprefixer`, `postcss`, `@vitejs/plugin-react`, `@types/react`,
+`@types/react-dom`.
 
-## Architecture Pattern
+**Intended but not installed:**
+
+- `zod` — validate LLM JSON before it reaches the mapper. **Absent today**, so LLM output
+  is currently trusted. This is the single most important untaken safety step.
+- `express`, `midtrans-client`, `wrangler`, `@cloudflare/workers-types`, `vitest`.
+
+There is no unit-test runner. Verification is Playwright-driven and screenshot-based.
+
+## Architecture Pattern (as built)
 
 ```
-React (Vite) editor  ──POST──>  Express orchestrator  ──>  LLM-Kita
-        │                              │
-   JSON→Component Mapper           Context Manager (session schema)
-        │                              │
-   Impeccable components          Coin ledger (pre-deduct)
-        │                              │
-        └──── Publish ────────────────> Cloudflare API ──> D1 + Workers + Pages
+Rail ─┬─ Editor  → Pipeline → PromptRow → Preview ──┬─ Inspector (free edits)
+      ├─ Skema   → SchemaView                       │
+      └─ Riwayat → LedgerView                       └─ Toasts
+                          │
+                    useBuilder (Zustand)
+              projects · ledger · view · run states
+                          │
+                  setTimeout simulation  ← the seam where the
+                                            orchestrator will attach
 ```
 
-Request path is **Router → Service → Data**, mirroring the eventual Workers layout so
-that generated projects look like the platform itself.
+All state lives in one Zustand store. There is no service layer, no data layer, and no
+network layer — so there is no seam to swap except `useBuilder`'s action functions
+(`runGeneration`, `runRevision`, `runPublish`, `topUp`). Those four functions are where
+the backend will connect.
 
 ## Auth Flow
 
-- Platform users authenticate to the Express orchestrator (mechanism **not specified** in
-  the PRD — JWT with refresh is the intended default).
-- Published user apps need their *own* auth story (end users of the generated app). The
-  PRD does not define it; do not invent one without an Open Decision being resolved.
-- LLM-Kita keys, Midtrans server keys, and Cloudflare API tokens must come from
-  environment variables / Cloudflare secrets — never committed.
+- Platform users authenticate to the Express orchestrator. **Mechanism still not
+  specified**; JWT with refresh was the intended default. Not implemented.
+- Published user apps need their own auth story. Not defined, and there is nothing to
+  protect yet.
+- Secrets must come from env vars / Cloudflare secrets. `.gitignore` already excludes
+  `.env` and `.env.*`. There is still no `.env.example`, so required variables are
+  undocumented outside `quickstart.md`.
 
 ## Development Commands
 
-> None exist yet. These are the intended scripts to create in `package.json`.
+Only the editor has scripts today (`apps/editor/package.json`):
 
-| Command | Meaning |
-|---------|---------|
-| `npm run dev` | Vite editor + Express orchestrator (concurrently) |
-| `npm run build` | Build the editor for Cloudflare Pages |
-| `npm test` | Vitest (unit + integration) |
-| `npm run lint` | ESLint + Prettier |
-| `npx wrangler d1 migrations apply` | Apply D1 migrations locally/remotely |
-| `npx wrangler deploy` | Deploy the generated Worker |
+| Command | Meaning | Exists |
+|---------|---------|--------|
+| `npm run dev` | Vite dev server on port 5180 | Yes |
+| `npm run build` | Production build to `dist/` (gitignored) | Yes |
+| `npm run preview` | Serve the production build | Yes |
+| `npm test` | Vitest | **No** — not configured |
+| `npm run lint` | ESLint + Prettier | **No** — not configured |
+
+Verification harness (run from `apps/editor/`):
+
+```bash
+node .shots/verify.mjs   # overflow + console errors at 1440/1280/1024px
+node .shots/flow.mjs     # free-inspector, fail+refund, publish paths
+```
+
+`flow.mjs` prints `BALANCE_AFTER_REFUND`, which must stay **128**.
 
 ## Billing Mechanics (technical)
 
-- Coin balance is a **ledger**, not a mutable column: `coin_ledger(id, user_id, delta,
-  reason, ref_id, balance_after, created_at)`. Balance is derived or cached.
-- Deduction is a check-then-act on balance → requires a row lock / atomic conditional
-  `UPDATE ... WHERE balance >= cost` / D1 `RETURNING` in a single statement.
-- Midtrans webhook must be idempotent keyed on `order_id` / `transaction_id`.
+**Target** (unchanged from the PRD): `coin_ledger(id, user_id, delta, reason, ref_id,
+balance_after, created_at)`. Balance derived or cached. Deduction is a check-then-act
+needing an atomic conditional `UPDATE ... WHERE balance >= cost`. Midtrans webhook
+idempotent on `order_id` / `transaction_id`.
+
+**What actually exists** (`apps/editor/src/store/useBuilder.ts`): an in-memory array with
+a derived balance.
+
+```ts
+const balanceOf = (ledger) => ledger.reduce((sum, e) => sum + e.coins, STARTER_BALANCE_BASE)
+```
+
+This correctly implements the *discipline* — balance is never a mutable stored number —
+but not the *guarantees*. There is no atomicity, so two concurrent runs in two tabs would
+both pass the `balance < cost` check and both spend. That check-then-act race is real and
+must be closed server-side before any coin is worth real money.
