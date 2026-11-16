@@ -2,8 +2,10 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { z } from 'zod'
 import { projectSchema } from '@rakit/schema'
 import type { LlmClient } from '../llm/client'
+import { LlmError, LlmTimeoutError } from '../llm/errors'
 import { generateProject, reviseProject } from '../services/generation'
 import { badRequest } from '../errors'
+
 
 /**
  * Request bodies.
@@ -55,7 +57,72 @@ const asyncHandler =
     handler(req, res).catch(next)
   }
 
-export function createRouter(client: LlmClient): Router {
+/**
+ * An AbortController that also fires on a deadline.
+ *
+ * Q-2 requires that *no* code path awaits the provider without an active AbortController
+ * timeout. Leaving that to the adapter is not enough: the adapter's timer is its own
+ * implementation detail, so any client that does not enforce one — a fake, or a future
+ * adapter someone writes in a hurry — hangs the request until the socket dies. The deadline
+ * belongs to the caller that owns the controller, which is here.
+ *
+ * The adapter keeps its own per-attempt timeout for retries; this is the outer bound that
+ * spans the whole request, including backoff.
+ */
+function abortAfter(ms: number): {
+  signal: AbortSignal
+  abort: () => void
+  dispose: () => void
+} {
+  const controller = new AbortController()
+  const timer = setTimeout(() => {
+    controller.abort(new LlmTimeoutError(ms))
+  }, ms)
+  // `unref` so a pending deadline never keeps the process alive on shutdown.
+  timer.unref?.()
+  return {
+    signal: controller.signal,
+    abort: () => controller.abort(),
+    dispose: () => clearTimeout(timer),
+  }
+}
+
+/**
+ * The default deadline, matching `LLM_TIMEOUT_MS`'s fallback in `loadLlmConfig()`. Read as a
+ * constant rather than by calling `loadLlmConfig()`, which would demand the API key and base
+ * URL just to import this module — the tests import it with no environment at all.
+ */
+const DEFAULT_TIMEOUT_MS = 60_000
+
+/**
+ * Run a provider call under the deadline, converting our own timeout into a 504.
+ *
+ * The adapter raises `LlmTimeoutError` for its per-attempt deadline, but a client that does
+ * not enforce its own timeout surfaces a bare `AbortError` when *this* deadline fires — and a
+ * bare AbortError maps to a generic 500, reporting a slow provider as a bug in this process.
+ * Translating here means the bound holds for any `LlmClient`, not only the one adapter that
+ * happens to be careful.
+ *
+ * A client that hung up is deliberately not a 504: nobody is waiting for that response, and
+ * `res` is already closed. Re-throwing lets the normal path settle without a send.
+ */
+async function underDeadline<T>(
+  deadline: AbortSignal,
+  clientGone: () => boolean,
+  run: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  try {
+    return await run()
+  } catch (error) {
+    if (deadline.aborted && !clientGone()) {
+      throw error instanceof LlmError ? error : new LlmTimeoutError(timeoutMs)
+    }
+    throw error
+  }
+}
+
+export function createRouter(client: LlmClient, timeoutMs: number = DEFAULT_TIMEOUT_MS): Router {
   const router = Router()
 
   router.get('/health', (_req: Request, res: Response) => {
@@ -74,13 +141,28 @@ export function createRouter(client: LlmClient): Router {
     asyncHandler(async (req, res) => {
       const body = parseBody(generateRequestSchema, req, 'prompt')
 
-      // Abort the provider call if the client hangs up: nobody is waiting for the answer,
-      // and the tokens are being paid for either way.
-      const controller = new AbortController()
-      res.on('close', () => controller.abort())
+      /**
+       * Two ways this call ends early: the deadline, and the client hanging up. Both abort
+       * the same signal, because either way nobody is waiting for the answer and the tokens
+       * are being paid for regardless.
+       */
+      const { signal, abort, dispose } = abortAfter(timeoutMs)
+      res.on('close', () => {
+        abort()
+        dispose()
+      })
 
-      const outcome = await generateProject(client, body.prompt, controller.signal)
-      res.json({ data: outcome, error: null })
+      try {
+        const outcome = await underDeadline(
+          signal,
+          () => res.writableEnded,
+          () => generateProject(client, body.prompt, signal),
+          timeoutMs,
+        )
+        res.json({ data: outcome, error: null })
+      } finally {
+        dispose()
+      }
     }),
   )
 
@@ -89,16 +171,23 @@ export function createRouter(client: LlmClient): Router {
     asyncHandler(async (req, res) => {
       const body = parseBody(reviseRequestSchema, req, 'instruction')
 
-      const controller = new AbortController()
-      res.on('close', () => controller.abort())
+      const { signal, abort, dispose } = abortAfter(timeoutMs)
+      res.on('close', () => {
+        abort()
+        dispose()
+      })
 
-      const outcome = await reviseProject(
-        client,
-        body.project,
-        body.instruction,
-        controller.signal,
-      )
-      res.json({ data: outcome, error: null })
+      try {
+        const outcome = await underDeadline(
+          signal,
+          () => res.writableEnded,
+          () => reviseProject(client, body.project, body.instruction, signal),
+          timeoutMs,
+        )
+        res.json({ data: outcome, error: null })
+      } finally {
+        dispose()
+      }
     }),
   )
 

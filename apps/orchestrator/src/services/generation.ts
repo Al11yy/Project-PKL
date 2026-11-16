@@ -17,7 +17,7 @@ import {
 import { ModelOutputError as BaseModelOutputError, badRequest } from '../errors'
 import { PROMPT_MAX_LENGTH, PROMPT_MIN_LENGTH } from '../config'
 import { logger } from '../logger'
-import { projectId } from '../ids'
+import { projectId, promptHash } from '../ids'
 
 export interface GenerationUsage {
   inputTokens: number
@@ -87,7 +87,11 @@ export class ModelOutputError extends BaseModelOutputError {}
  * extractor and the schema — because truncation usually breaks the JSON itself, which is
  * exactly the path that would otherwise swallow the hint.
  */
-export function parseEnvelope(content: string, finishReason: string | undefined): LlmEnvelope {
+export function parseEnvelope(
+  content: string,
+  finishReason: string | undefined,
+  promptHashValue: string,
+): LlmEnvelope {
   const truncated = finishReason === 'length'
   const truncationNote = {
     path: '(root)',
@@ -98,6 +102,8 @@ export function parseEnvelope(content: string, finishReason: string | undefined)
 
   if (!extracted.ok) {
     logger.warn('llm.output.not-json', {
+      // M-5: the hash ties a failure to its input without logging the input itself.
+      promptHash: promptHashValue,
       reason: extracted.reason,
       finishReason,
       contentLength: content.length,
@@ -120,6 +126,7 @@ export function parseEnvelope(content: string, finishReason: string | undefined)
     if (truncated) issues.unshift(truncationNote)
 
     logger.warn('llm.output.invalid', {
+      promptHash: promptHashValue,
       finishReason,
       issuePaths: issues.map((i) => i.path),
     })
@@ -144,7 +151,11 @@ export async function generateProject(
     signal,
   })
 
-  const envelope = parseEnvelope(completion.content, completion.finishReason)
+  const envelope = parseEnvelope(
+    completion.content,
+    completion.finishReason,
+    promptHash(prompt),
+  )
   const usage: GenerationUsage = {
     inputTokens: completion.usage.inputTokens,
     outputTokens: completion.usage.outputTokens,
@@ -183,7 +194,11 @@ export async function reviseProject(
     signal,
   })
 
-  const envelope = parseEnvelope(completion.content, completion.finishReason)
+  const envelope = parseEnvelope(
+    completion.content,
+    completion.finishReason,
+    promptHash(instruction),
+  )
   const usage: GenerationUsage = {
     inputTokens: completion.usage.inputTokens,
     outputTokens: completion.usage.outputTokens,

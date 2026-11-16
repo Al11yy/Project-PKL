@@ -31,10 +31,41 @@ function isBodyParserError(error: unknown): error is BodyParserError {
   )
 }
 
-export function createApp(client: LlmClient): Express {
+/**
+ * `timeoutMs` is optional so production callers keep the configured default, while a test
+ * can run the deadline in milliseconds rather than waiting out the real 60 s.
+ */
+export function createApp(client: LlmClient, timeoutMs?: number): Express {
   const app = express()
 
   app.disable('x-powered-by')
+
+  /**
+   * Reject a non-JSON Content-Type before the parser sees it.
+   *
+   * `express.json()` silently skips a body whose type it does not match, leaving
+   * `req.body` as an empty object — so a `text/plain` request would fail downstream as
+   * INVALID_REQUEST (400) with a confusing "expected string, received undefined". M-8 asks
+   * for 415, and the distinction is real: nothing was wrong with the content, the declared
+   * type was wrong.
+   *
+   * Only requests that declare a type are checked; a bodyless GET has no Content-Type and
+   * must pass through. Routes with no body would reject on the same grounds.
+   */
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (!req.is('application/json') && req.headers['content-type'] !== undefined) {
+      res.status(415).json({
+        data: null,
+        error: {
+          code: 'UNSUPPORTED_MEDIA_TYPE',
+          message: 'Isi permintaan harus berformat application/json.',
+        },
+      })
+      return
+    }
+    next()
+  })
+
   app.use(express.json({ limit: BODY_LIMIT }))
 
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -44,7 +75,7 @@ export function createApp(client: LlmClient): Express {
     next()
   })
 
-  app.use('/api/v1', createRouter(client))
+  app.use('/api/v1', createRouter(client, timeoutMs))
 
   /**
    * One error handler for the whole app.

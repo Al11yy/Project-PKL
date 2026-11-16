@@ -102,6 +102,38 @@ describe('POST /api/v1/generate', () => {
    * checking that some detail exists. Three blocks, so the index is a real position and not
    * the trivially-correct zero.
    */
+  /** M-8: a non-JSON Content-Type is 415, not a confusing downstream 400. */
+  it('returns 415 UNSUPPORTED_MEDIA_TYPE for a text/plain body', async () => {
+    const client = clientReturning(validProjectJson())
+
+    const response = await request(app(client))
+      .post('/api/v1/generate')
+      .set('Content-Type', 'text/plain')
+      .send('{"prompt":"sistem kasir untuk klinik"}')
+
+    expect(response.status).toBe(415)
+    expect(response.body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE')
+    // Rejected before parsing, so nothing was spent discovering it.
+    expect(client.calls).toHaveLength(0)
+  })
+
+  it('still serves a bodyless GET with no Content-Type', async () => {
+    const response = await request(app(clientReturning(validProjectJson()))).get('/api/v1/health')
+
+    expect(response.status).toBe(200)
+  })
+
+  /** M-8: over 32 kB is 413, refused by Express before the body is read into memory. */
+  it('returns 413 PAYLOAD_TOO_LARGE for a body over 32 kB', async () => {
+    const response = await request(app(clientReturning(validProjectJson())))
+      .post('/api/v1/generate')
+      .set('Content-Type', 'application/json')
+      .send(JSON.stringify({ prompt: 'a'.repeat(40_000) }))
+
+    expect(response.status).toBe(413)
+    expect(response.body.error.code).toBe('PAYLOAD_TOO_LARGE')
+  })
+
   it('returns 422 INVALID_SCHEMA naming the exact path and offending kind', async () => {
     const badKind = JSON.stringify({
       name: 'X',
@@ -261,6 +293,43 @@ describe('POST /api/v1/revise', () => {
 
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('PROMPT_TOO_LONG')
+  })
+})
+
+/**
+ * Q-2: "No code path SHALL await the provider without an active AbortController timeout."
+ *
+ * Exercised with a client that never settles, so the bound is proven by the request
+ * *returning* rather than by a fake that throws a timeout error on cue — the latter would
+ * pass even if nothing ever aborted the call.
+ */
+describe('Q-2: every external call is bounded', () => {
+  it('resolves with 504 rather than hanging when the provider never responds', async () => {
+    const timeoutMs = 400
+
+    const hanging: LlmClient = {
+      complete: ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            const abort = new Error('aborted')
+            abort.name = 'AbortError'
+            reject(abort)
+          })
+        }),
+    }
+
+    const app = createApp(hanging, timeoutMs)
+    const started = Date.now()
+
+    const response = await request(app)
+      .post('/api/v1/generate')
+      .send({ prompt: PROMPT })
+
+    const elapsed = Date.now() - started
+
+    expect(response.status).toBe(504)
+    expect(response.body.error.code).toBe('LLM_TIMEOUT')
+    expect(elapsed).toBeLessThan(timeoutMs + 1_000)
   })
 })
 

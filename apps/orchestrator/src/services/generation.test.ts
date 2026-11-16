@@ -54,13 +54,13 @@ describe('checkPrompt', () => {
 
 describe('parseEnvelope', () => {
   it('accepts a fenced project', () => {
-    const envelope = parseEnvelope(`\`\`\`json\n${validProjectJson()}\n\`\`\``, 'stop')
+    const envelope = parseEnvelope(`\`\`\`json\n${validProjectJson()}\n\`\`\``, 'stop', 'abc123')
 
     expect(envelope).toHaveProperty('name')
   })
 
   it('accepts a refusal', () => {
-    const envelope = parseEnvelope('{"refusal":{"reason":"Tidak dapat dipenuhi."}}', 'stop')
+    const envelope = parseEnvelope('{"refusal":{"reason":"Tidak dapat dipenuhi."}}', 'stop', 'abc123')
 
     expect(envelope).toHaveProperty('refusal')
   })
@@ -77,7 +77,7 @@ describe('parseEnvelope', () => {
     })
 
     try {
-      parseEnvelope(JSON.stringify(bad), 'stop')
+      parseEnvelope(JSON.stringify(bad), 'stop', 'abc123')
       expect.unreachable('should have thrown')
     } catch (error) {
       expect(error).toBeInstanceOf(ContractError)
@@ -90,12 +90,12 @@ describe('parseEnvelope', () => {
   })
 
   it('rejects prose with no JSON, as a contract error rather than a SyntaxError', () => {
-    expect(() => parseEnvelope('Tentu! Berikut skemanya.', 'stop')).toThrow(ContractError)
+    expect(() => parseEnvelope('Tentu! Berikut skemanya.', 'stop', 'abc123')).toThrow(ContractError)
   })
 
   it('prefixes a truncation detail when finish_reason is length', () => {
     try {
-      parseEnvelope('{"name": "Kasir", "screens": [', 'length')
+      parseEnvelope('{"name": "Kasir", "screens": [', 'length', 'abc123')
       expect.unreachable('should have thrown')
     } catch (error) {
       const issues = (error as ContractError).issues
@@ -107,7 +107,7 @@ describe('parseEnvelope', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    expect(() => parseEnvelope('bukan json', 'stop')).toThrow()
+    expect(() => parseEnvelope('bukan json', 'stop', 'abc123')).toThrow()
     expect(warn).toHaveBeenCalled()
     // Expected during tuning, so it must not be logged as an incident.
     expect(error).not.toHaveBeenCalled()
