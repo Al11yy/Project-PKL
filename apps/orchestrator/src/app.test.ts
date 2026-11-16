@@ -294,6 +294,47 @@ describe('POST /api/v1/revise', () => {
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('PROMPT_TOO_LONG')
   })
+
+  /**
+   * M-7, enforced rather than logged. The client keeps its pre-revision state on any non-2xx,
+   * so refusing is how the UI is kept from ever holding a tree with rebound keys.
+   */
+  it('returns 422 REVISION_DROPPED_DATA when the model silently drops a screen', async () => {
+    const twoScreens = clientProject({
+      screens: [
+        { id: 's-kasir', name: 'Kasir', blocks: [{ id: 'b-1', kind: 'navbar', title: 'A', body: 'B' }] },
+        { id: 's-laporan', name: 'Laporan', blocks: [{ id: 'b-2', kind: 'navbar', title: 'C', body: 'D' }] },
+      ],
+    })
+
+    const response = await request(app(clientReturning(validProjectJson())))
+      .post('/api/v1/revise')
+      .send({ project: twoScreens, instruction: 'ubah judul kasir' })
+
+    expect(response.status).toBe(422)
+    expect(response.body.error.code).toBe('REVISION_DROPPED_DATA')
+    // The offending screen is named, so a client can say which one went missing.
+    expect(JSON.stringify(response.body.error.details)).toContain('s-laporan')
+    // Nothing is returned for the client to accidentally apply.
+    expect(response.body.data).toBeNull()
+  })
+
+  it('allows a requested removal instead of refusing it', async () => {
+    // s-kasir carries the fixture's own block id, so the only change under test is the
+    // removal the instruction asked for.
+    const twoScreens = clientProject({
+      screens: [
+        { id: 's-kasir', name: 'Kasir', blocks: [{ id: 'b-nav', kind: 'navbar', title: 'A', body: 'B' }] },
+        { id: 's-laporan', name: 'Laporan', blocks: [{ id: 'b-2', kind: 'navbar', title: 'C', body: 'D' }] },
+      ],
+    })
+
+    const response = await request(app(clientReturning(validProjectJson())))
+      .post('/api/v1/revise')
+      .send({ project: twoScreens, instruction: 'hapus layar laporan dari aplikasi' })
+
+    expect(response.status).toBe(200)
+  })
 })
 
 /**

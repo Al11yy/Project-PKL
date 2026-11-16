@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ContractError, projectSchema } from '@rakit/schema'
 import { checkPrompt, generateProject, parseEnvelope, reviseProject } from './generation'
-import { ApiErrorException } from '../errors'
+import { ApiErrorException, RevisionConflictError } from '../errors'
 import { clientReturning, validLlmProject, validProjectJson, clientProject } from '../testing/fixtures'
 
 const SIGNAL = new AbortController().signal
@@ -198,7 +198,7 @@ describe('reviseProject', () => {
     expect(sent).toContain('tambah kolom alergi')
   })
 
-  it('warns when the model drops a screen the user had', async () => {
+  it('rejects a revision that drops a screen the instruction never mentioned', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const before = clientProject({
@@ -208,15 +208,12 @@ describe('reviseProject', () => {
       ],
     })
 
-    const outcome = await reviseProject(
-      clientReturning(validProjectJson()),
-      before,
-      'ubah judul kasir',
-      SIGNAL,
-    )
+    // The instruction only asks about the title; a returned tree missing Laporan is the
+    // model discarding work the user still holds, so it must not reach the UI.
+    await expect(
+      reviseProject(clientReturning(validProjectJson()), before, 'ubah judul kasir', SIGNAL),
+    ).rejects.toThrow(RevisionConflictError)
 
-    // The revision still succeeds — a dropped screen is a signal, not a hard failure.
-    expect('project' in outcome).toBe(true)
     const events = warn.mock.calls.map((c) => String(c[0]))
     expect(events.some((e) => e.includes('dropped-screens'))).toBe(true)
 
@@ -254,7 +251,7 @@ describe('M-7: block id preservation on revision', () => {
     screens: [{ id: 's-kasir', name: 'Kasir', blocks }],
   })
 
-  it('warns when a returning screen came back with every block renumbered', async () => {
+  it('rejects a screen whose blocks were all renumbered', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const client = clientReturning(
       JSON.stringify(
@@ -265,11 +262,54 @@ describe('M-7: block id preservation on revision', () => {
       ),
     )
 
-    await reviseProject(client, before, 'tambah kolom alergi', new AbortController().signal)
+    // Every id replaced would rebind each React key in the screen and strand the
+    // inspector's selection, so the tree is refused rather than rendered.
+    await expect(
+      reviseProject(client, before, 'tambah kolom alergi', new AbortController().signal),
+    ).rejects.toThrow(RevisionConflictError)
 
     const events = warn.mock.calls.map((c) => JSON.stringify(c))
     expect(events.some((e) => e.includes('renumbered-blocks'))).toBe(true)
     warn.mockRestore()
+  })
+
+  /** Refusing must not block a revision the user actually asked for. */
+  it('allows a screen to disappear when the instruction asks for its removal', async () => {
+    const client = clientReturning(
+      JSON.stringify({
+        name: 'Kasir',
+        slug: 'kasir',
+        tables: [],
+        screens: [
+          {
+            id: 's-kasir',
+            name: 'Kasir',
+            blocks: [{ id: 'b-nav', kind: 'navbar', title: 'Kasir', body: 'Kasir' }],
+          },
+        ],
+      }),
+    )
+
+    const outcome = await reviseProject(
+      client,
+      before,
+      'hapus layar s-laporan',
+      new AbortController().signal,
+    )
+
+    expect('project' in outcome).toBe(true)
+  })
+
+  it('still permits removing a single block when the rest are kept', async () => {
+    const client = clientReturning(
+      JSON.stringify(
+        screenWith([{ id: 'b-nav', kind: 'navbar', title: 'Kasir', body: 'Kasir' }]),
+      ),
+    )
+
+    const outcome = await reviseProject(client, before, 'hapus blok statistik', new AbortController().signal)
+
+    expect('project' in outcome).toBe(true)
   })
 
   it('does not warn when the model kept the ids it was asked to keep', async () => {

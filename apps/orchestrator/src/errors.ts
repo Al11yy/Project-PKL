@@ -16,6 +16,25 @@ export class ModelOutputError extends ContractError {
 }
 
 /**
+ * A revision the model answered by discarding data the user still had.
+ *
+ * Distinct from `ModelOutputError`: the payload itself is a valid project — it parses, and
+ * every id in it is well formed. What it is not is *the user's* project, because ids the
+ * user was already holding were thrown away. Rendering it would rebind React keys and lose
+ * `selectedBlockId` mid-session, so it is refused rather than drawn.
+ *
+ * A separate class, and a separate code, because a client can act on the difference: an
+ * `INVALID_SCHEMA` means "rephrase and try again", while this one means "the model ignored
+ * what you had, retry or edit by hand". Both are 422 — the request was fine.
+ */
+export class RevisionConflictError extends ContractError {
+  constructor(issues: { path: string; message: string }[]) {
+    super(issues)
+    this.name = 'RevisionConflictError'
+  }
+}
+
+/**
  * The response envelope from `conventions.md`.
  *
  * Clients branch on `code`, never on the message, so `code` is stable UPPER_SNAKE and the
@@ -84,6 +103,20 @@ export function toApiError(error: unknown): ApiErrorException {
    *
    * Checked before the bare ContractError case, since this is a subclass.
    */
+  /**
+   * A revision that discarded the user's ids. Checked before `ModelOutputError` and before
+   * the bare `ContractError` case, since it is a subclass of the latter and must not be
+   * folded into either — the payload was well formed, and reporting it as a schema failure
+   * would tell the user to rephrase a prompt that did nothing wrong.
+   */
+  if (error instanceof RevisionConflictError) {
+    return new ApiErrorException(422, {
+      code: 'REVISION_DROPPED_DATA',
+      message: 'Revisi mengubah bagian yang tidak diminta. Proyek Anda tidak diubah.',
+      details: error.issues,
+    })
+  }
+
   if (error instanceof ModelOutputError) {
     return new ApiErrorException(422, {
       code: 'INVALID_SCHEMA',

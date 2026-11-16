@@ -14,7 +14,7 @@ import {
   buildReviseMessage,
   buildSystemPrompt,
 } from '../prompt/system-prompt'
-import { ModelOutputError as BaseModelOutputError, badRequest } from '../errors'
+import { ModelOutputError as BaseModelOutputError, RevisionConflictError, badRequest } from '../errors'
 import { PROMPT_MAX_LENGTH, PROMPT_MIN_LENGTH } from '../config'
 import { logger } from '../logger'
 import { projectId, promptHash } from '../ids'
@@ -217,15 +217,47 @@ export async function reviseProject(
    * The client keeps its pre-revision state on failure, so nothing is lost either way.
    */
   const dropped = droppedScreenIds(currentProject, envelope)
-  if (dropped.length > 0) {
+  const removedOnPurpose = instructionRequestsRemoval(instruction)
+
+  /**
+   * A dropped screen is only acceptable when the instruction asked for a removal. "Hapus
+   * layar Laporan" that results in Laporan being gone is the revision working; any other
+   * instruction that loses a screen is the model discarding work the user still had.
+   *
+   * Refused rather than logged, because the contract is that the UI never receives a tree
+   * whose ids the user is no longer holding. The editor keeps its pre-revision state on a
+   * non-2xx, so the refusal costs the user nothing but the retry.
+   */
+  if (dropped.length > 0 && !removedOnPurpose) {
     logger.warn('llm.revision.dropped-screens', { count: dropped.length, ids: dropped })
+    throw new RevisionConflictError(
+      dropped.map((id) => ({
+        path: `screens.${id}`,
+        message: 'Layar dihilangkan padahal tidak diminta.',
+      })),
+    )
   }
 
-  // M-7: block ids that did not survive would break React keys and the inspector's
-  // selection, so renumbering is reported rather than passing as a clean revision.
+  if (dropped.length > 0) {
+    // Removal was asked for: the ids are gone by design, so this stays informative.
+    logger.info('llm.revision.dropped-screens-requested', { count: dropped.length, ids: dropped })
+  }
+
+  /**
+   * Block ids must survive inside a screen that came back. Renumbering rebinds every React
+   * key in that screen and strands `selectedBlockId`, so a screen whose blocks were renamed
+   * wholesale is refused. Partial loss is allowed: an instruction may legitimately delete a
+   * block, and keeping some ids is proof the model edited rather than regenerated.
+   */
   const renumbered = renumberedBlockScreens(currentProject, envelope)
   if (renumbered.length > 0) {
     logger.warn('llm.revision.renumbered-blocks', { screens: renumbered })
+    throw new RevisionConflictError(
+      renumbered.map(({ screenId, total }) => ({
+        path: `screens.${screenId}.blocks`,
+        message: `ID blok diganti seluruhnya (${total} blok), padahal layar tidak berubah.`,
+      })),
+    )
   }
 
   return { project, usage }
@@ -271,6 +303,26 @@ export function renumberedBlockScreens(
   }
 
   return findings
+}
+
+/**
+ * Words that ask for a removal. Indonesian instructions arrive in mixed register, so this
+ * covers the verb forms ("hapus", "menghapus", "dihapus") and the common English synonyms.
+ */
+const REMOVAL_INTENT = /\b(hapus|menghapus|dihapus|remove|delete|hilangkan|buang|drop)\b/i
+
+/**
+ * Whether an instruction asked for something to be removed at all.
+ *
+ * This is deliberately coarse — one verb for any noun. The alternative, matching the removal
+ * verb to a specific screen name, needs the model's own wording and would fail on "hapus
+ * layar kedua" or "hapus semua layar laporan dan stok". A false positive here does not lose
+ * data: it downgrades a rejection to a warning, and the screen really is gone, which is what
+ * the user asked for. A false negative would reject a legitimate deletion, so the check errs
+ * toward permitting removal rather than forbidding it.
+ */
+export function instructionRequestsRemoval(instruction: string): boolean {
+  return REMOVAL_INTENT.test(instruction)
 }
 
 export function droppedScreenIds(
