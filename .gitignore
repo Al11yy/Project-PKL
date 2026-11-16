@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Local runtime artefacts — screenshot output only; the harness that writes
+# them (.shots/*.mjs) is hand-written source and stays tracked.
+# The leading **/ matters: a pattern containing a slash is anchored to the
+# .gitignore's own directory, so bare ".shots/*.png" would miss apps/editor/.
+**/.shots/*.png
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment — never commit secrets or credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.npmrc.local
+
+# Editor / tooling state
+.vscode/
+.idea/
+coverage/
+.cache/

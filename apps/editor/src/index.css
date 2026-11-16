@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ground font-sans text-ink antialiased;
+    font-feature-settings: 'cv11' 1, 'ss01' 1;
+  }
+
+  /* Browser surfaces carry the design too. */
+  ::selection {
+    background: #dbeafe;
+    color: #0b1220;
+  }
+
+  :focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  input,
+  textarea {
+    caret-color: #2563eb;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #d1d5db transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 99px;
+    border: 3px solid #ffffff;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #9ca3af;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .hairline {
+    @apply border-rule;
+  }
+
+  /* A press that reads as press: 1px of travel, no glow. */
+  .press {
+    transition:
+      background-color 120ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      border-color 120ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      color 120ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .press:active:not(:disabled) {
+    transform: translateY(0.5px);
+  }
+}
