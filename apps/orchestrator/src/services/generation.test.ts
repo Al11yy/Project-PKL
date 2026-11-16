@@ -121,8 +121,8 @@ describe('generateProject', () => {
   it('returns a project that passes projectSchema', async () => {
     const outcome = await generateProject(clientReturning(validProjectJson()), PROMPT, SIGNAL)
 
-    expect(outcome.kind).toBe('project')
-    if (outcome.kind !== 'project') return
+    expect('project' in outcome).toBe(true)
+    if (!('project' in outcome)) return
 
     // Property 2, at the service boundary.
     expect(projectSchema.safeParse(outcome.project).success).toBe(true)
@@ -135,7 +135,7 @@ describe('generateProject', () => {
       SIGNAL,
     )
 
-    if (outcome.kind !== 'project') throw new Error('expected a project')
+    if (!('project' in outcome)) throw new Error('expected a project')
     expect(outcome.project.tablesCount).toBe(1)
     expect(outcome.project.screensCount).toBe(1)
   })
@@ -147,7 +147,7 @@ describe('generateProject', () => {
       SIGNAL,
     )
 
-    if (outcome.kind !== 'project') throw new Error('expected a project')
+    if (!('project' in outcome)) throw new Error('expected a project')
     expect(outcome.project.id).not.toBe('hacked')
     expect(outcome.project.id).toMatch(/^p-/)
     expect(outcome.project.status).toBe('draft')
@@ -161,9 +161,10 @@ describe('generateProject', () => {
       SIGNAL,
     )
 
-    expect(outcome.kind).toBe('refusal')
-    if (outcome.kind !== 'refusal') return
-    expect(outcome.reason).toBe('Permintaan terlalu luas.')
+    // M-5: the refusal is exposed as `data.refusal`, with 200 and no error.
+    expect('refusal' in outcome).toBe(true)
+    if (!('refusal' in outcome)) return
+    expect(outcome.refusal.reason).toBe('Permintaan terlalu luas.')
   })
 
   it('reports usage from the completion', async () => {
@@ -215,7 +216,7 @@ describe('reviseProject', () => {
     )
 
     // The revision still succeeds — a dropped screen is a signal, not a hard failure.
-    expect(outcome.kind).toBe('project')
+    expect('project' in outcome).toBe(true)
     const events = warn.mock.calls.map((c) => String(c[0]))
     expect(events.some((e) => e.includes('dropped-screens'))).toBe(true)
 

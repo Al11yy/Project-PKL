@@ -70,9 +70,25 @@ export class LlmProviderError extends LlmError {
   }
 }
 
+/**
+ * A provider 401/403.
+ *
+ * Carries `LLM_UNAVAILABLE`, which M-6 requires: "the client's 401 is not the user's 401".
+ * A distinct `LLM_AUTH_FAILED` code reads better but is wrong — it tells the editor that
+ * *its* credentials were rejected, when in fact our API key was, and the user can do nothing
+ * about it. The specific cause still reaches the log via `providerStatus`.
+ *
+ * It remains its own class because the retry policy needs to distinguish it: this is never
+ * retried, while a 5xx is retried once.
+ */
 export class LlmAuthError extends LlmError {
-  constructor() {
-    super('LLM_AUTH_FAILED', 502, 'Konfigurasi penyedia AI ditolak. Hubungi administrator.')
+  constructor(providerStatus: 401 | 403 = 401) {
+    super(
+      'LLM_UNAVAILABLE',
+      502,
+      'Konfigurasi penyedia AI ditolak. Hubungi administrator.',
+      providerStatus,
+    )
     this.name = 'LlmAuthError'
   }
 }

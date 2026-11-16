@@ -25,9 +25,18 @@ export interface GenerationUsage {
   durationMs: number
 }
 
+/**
+ * The response body shape, fixed by M-6: `data` carries either `project` or `refusal`, and
+ * `usage` alongside both.
+ *
+ * An earlier version used a `kind: 'project' | 'refusal'` tag. M-5 requires `data.refusal` to
+ * be populated on a refusal, and a discriminator field would be a second, competing way for a
+ * client to detect the same thing — the client would branch on `data.kind` and render nothing
+ * when the field was renamed. Keying on the presence of `refusal` keeps one source of truth.
+ */
 export type GenerationOutcome =
-  | { kind: 'project'; project: ParsedProject; usage: GenerationUsage }
-  | { kind: 'refusal'; reason: string; usage: GenerationUsage }
+  | { project: ParsedProject; usage: GenerationUsage }
+  | { refusal: { reason: string }; usage: GenerationUsage }
 
 /**
  * Prompt bounds, applied to the trimmed value.
@@ -143,7 +152,7 @@ export async function generateProject(
   }
 
   if (isRefusal(envelope)) {
-    return { kind: 'refusal', reason: envelope.refusal.reason, usage }
+    return { refusal: { reason: envelope.refusal.reason }, usage }
   }
 
   const project = assembleProject(envelope, { id: projectId(), prompt })
@@ -155,7 +164,7 @@ export async function generateProject(
     logger.warn('llm.output.stray-accent', { count: strayAccents.length })
   }
 
-  return { kind: 'project', project, usage }
+  return { project, usage }
 }
 
 export async function reviseProject(
@@ -182,7 +191,7 @@ export async function reviseProject(
   }
 
   if (isRefusal(envelope)) {
-    return { kind: 'refusal', reason: envelope.refusal.reason, usage }
+    return { refusal: { reason: envelope.refusal.reason }, usage }
   }
 
   const project = assembleProject(envelope, { id: projectId(), prompt: instruction })
@@ -197,7 +206,7 @@ export async function reviseProject(
     logger.warn('llm.revision.dropped-screens', { count: dropped.length, ids: dropped })
   }
 
-  return { kind: 'project', project, usage }
+  return { project, usage }
 }
 
 export function droppedScreenIds(

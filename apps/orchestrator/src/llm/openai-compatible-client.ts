@@ -145,7 +145,7 @@ export class OpenAiCompatibleClient implements LlmClient {
   }
 
   private errorFor(status: number): LlmError {
-    if (status === 401 || status === 403) return new LlmAuthError()
+    if (status === 401 || status === 403) return new LlmAuthError(status)
     if (status === 429) return new LlmRateLimitError()
     return new LlmProviderError(status)
   }

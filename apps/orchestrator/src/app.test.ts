@@ -96,12 +96,28 @@ describe('POST /api/v1/generate', () => {
     expect(client.calls).toHaveLength(1)
   })
 
-  it('returns 422 INVALID_SCHEMA for a non-whitelisted kind', async () => {
+  /**
+   * M-5 names the exact path and message for this case — `screens.0.blocks.2.kind` with
+   * "kind tidak dikenal: iframe" — so the test asserts them literally rather than merely
+   * checking that some detail exists. Three blocks, so the index is a real position and not
+   * the trivially-correct zero.
+   */
+  it('returns 422 INVALID_SCHEMA naming the exact path and offending kind', async () => {
     const badKind = JSON.stringify({
       name: 'X',
       slug: 'x',
       tables: [],
-      screens: [{ id: 's-1', name: 'S', blocks: [{ id: 'b-1', kind: 'iframe' }] }],
+      screens: [
+        {
+          id: 's-1',
+          name: 'S',
+          blocks: [
+            { id: 'b-0', kind: 'navbar', title: 'A', body: 'B' },
+            { id: 'b-1', kind: 'stat', title: 'C', body: 'D' },
+            { id: 'b-2', kind: 'iframe', title: 'E', body: 'F' },
+          ],
+        },
+      ],
     })
 
     const response = await request(app(clientReturning(badKind)))
@@ -110,31 +126,84 @@ describe('POST /api/v1/generate', () => {
 
     expect(response.status).toBe(422)
     expect(response.body.error.code).toBe('INVALID_SCHEMA')
-    // The issue paths are the whole value of a 422 to a client: they say which field was
-    // rejected and why, so a caller can fix the prompt rather than guess.
-    expect(Array.isArray(response.body.error.details)).toBe(true)
-    expect(response.body.error.details.length).toBeGreaterThan(0)
-    expect(response.body.error.details[0]).toHaveProperty('path')
-    expect(response.body.error.details[0]).toHaveProperty('message')
+    expect(response.body.error.details).toContainEqual({
+      path: 'screens.0.blocks.2.kind',
+      message: 'kind tidak dikenal: iframe',
+    })
   })
 
-  it('returns 200 with a refusal, not an error', async () => {
-    const response = await request(app(clientReturning('{"refusal":{"reason":"Terlalu luas."}}')))
+  /**
+   * M-5 forbids the tempting alternative: returning 200 with the offending block dropped.
+   * Dropping would hide model misbehaviour during tuning, which is when it must be visible.
+   */
+  it('never returns 200 with a non-whitelisted kind silently dropped', async () => {
+    const badKind = JSON.stringify({
+      name: 'X',
+      slug: 'x',
+      tables: [],
+      screens: [
+        { id: 's-1', name: 'S', blocks: [{ id: 'b-1', kind: 'form', title: 'A', body: 'B' }] },
+      ],
+    })
+
+    const response = await request(app(clientReturning(badKind)))
+      .post('/api/v1/generate')
+      .send({ prompt: PROMPT })
+
+    expect(response.status).toBe(422)
+    expect(response.body.data).toBeNull()
+  })
+
+  /** M-5: prose instead of JSON is a 422 whose detail says so, never a raw SyntaxError. */
+  it('states that no JSON object was found when the model returns prose', async () => {
+    const response = await request(app(clientReturning('Tentu! Berikut skemanya.')))
+      .post('/api/v1/generate')
+      .send({ prompt: PROMPT })
+
+    expect(response.status).toBe(422)
+    expect(response.body.error.code).toBe('INVALID_SCHEMA')
+    const detail = JSON.stringify(response.body.error.details)
+    expect(detail).toContain('JSON')
+    expect(detail).not.toContain('SyntaxError')
+  })
+
+  /** M-5: a fenced response is valid — models add fences even when told not to. */
+  it('accepts a fenced JSON response', async () => {
+    const response = await request(app(clientReturning(`\`\`\`json\n${validProjectJson()}\n\`\`\``)))
       .post('/api/v1/generate')
       .send({ prompt: PROMPT })
 
     expect(response.status).toBe(200)
-    expect(response.body.data.kind).toBe('refusal')
-    expect(response.body.data.reason).toBe('Terlalu luas.')
+    expect(projectSchema.safeParse(response.body.data.project).success).toBe(true)
   })
 
-  it('returns 502 LLM_AUTH_FAILED when the provider rejects the key', async () => {
+  it('returns 200 with data.refusal populated, not an error', async () => {
+    const response = await request(app(clientReturning('{"refusal":{"reason":"Terlalu luas."}}')))
+      .post('/api/v1/generate')
+      .send({ prompt: PROMPT })
+
+    // M-5: a refusal is success. The statement is asserted twice, from both directions,
+    // because reporting it as an error is the failure this criterion exists to prevent.
+    expect(response.status).toBe(200)
+    expect(response.body.error).toBeNull()
+    expect(response.body.data.refusal).toEqual({ reason: 'Terlalu luas.' })
+    expect(response.body.data.project).toBeUndefined()
+  })
+
+  /**
+   * M-6: "the client's 401 is not the user's 401". Our provider rejecting our key must look
+   * like an upstream fault, not like the user's session being invalid — otherwise the editor
+   * sends someone to re-login to fix a server-side key problem.
+   */
+  it('returns 502 LLM_UNAVAILABLE when the provider rejects our key', async () => {
     const response = await request(app(failingClient(new LlmAuthError())))
       .post('/api/v1/generate')
       .send({ prompt: PROMPT })
 
     expect(response.status).toBe(502)
-    expect(response.body.error.code).toBe('LLM_AUTH_FAILED')
+    expect(response.body.error.code).toBe('LLM_UNAVAILABLE')
+    // Never a 401: the response must not invite the user to authenticate.
+    expect(response.status).not.toBe(401)
   })
 
   it('returns 503 LLM_RATE_LIMITED', async () => {
