@@ -221,7 +221,56 @@ export async function reviseProject(
     logger.warn('llm.revision.dropped-screens', { count: dropped.length, ids: dropped })
   }
 
+  // M-7: block ids that did not survive would break React keys and the inspector's
+  // selection, so renumbering is reported rather than passing as a clean revision.
+  const renumbered = renumberedBlockScreens(currentProject, envelope)
+  if (renumbered.length > 0) {
+    logger.warn('llm.revision.renumbered-blocks', { screens: renumbered })
+  }
+
   return { project, usage }
+}
+
+/**
+ * Screens whose ids came back but whose blocks were all renamed.
+ *
+ * M-7 requires block ids to survive a revision so React keys and the inspector's
+ * `selectedBlockId` do not break mid-session. The prompt asks the model to keep them, but
+ * asking is not a guarantee: a model that renumbers every block would silently strand the
+ * user's current selection. That cannot be repaired here either — the old ids are gone — so
+ * it is surfaced like a dropped screen, as a signal during tuning.
+ *
+ * Only screens present in both are compared. A screen the model dropped is a different
+ * finding and already logged; a screen it added has no prior ids to preserve.
+ */
+export function renumberedBlockScreens(
+  before: unknown,
+  after: { screens: { id: string; blocks: { id: string }[] }[] },
+): { screenId: string; kept: number; total: number }[] {
+  if (before === null || typeof before !== 'object') return []
+
+  const priorScreens = (before as { screens?: unknown }).screens
+  if (!Array.isArray(priorScreens)) return []
+
+  const priorById = new Map<string, Set<string>>()
+  for (const screen of priorScreens) {
+    if (screen === null || typeof screen !== 'object') continue
+    const { id, blocks } = screen as { id?: unknown; blocks?: unknown }
+    if (typeof id !== 'string' || !Array.isArray(blocks)) continue
+    priorById.set(id, new Set(blocks.map((b) => (b as { id?: unknown })?.id as string)))
+  }
+
+  const findings: { screenId: string; kept: number; total: number }[] = []
+  for (const screen of after.screens) {
+    const prior = priorById.get(screen.id)
+    if (prior === undefined || screen.blocks.length === 0) continue
+    const kept = screen.blocks.filter((b) => prior.has(b.id)).length
+    // Partial loss is expected — the instruction may legitimately delete a block. Zero kept
+    // alongside a non-empty result is the signature of renumbering rather than editing.
+    if (kept === 0) findings.push({ screenId: screen.id, kept, total: screen.blocks.length })
+  }
+
+  return findings
 }
 
 export function droppedScreenIds(

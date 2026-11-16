@@ -223,3 +223,86 @@ describe('reviseProject', () => {
     warn.mockRestore()
   })
 })
+
+/**
+ * M-7: "the returned block ids within that screen SHALL be preserved where the model kept
+ * them, so React keys and the inspector's `selectedBlockId` do not break mid-session."
+ */
+describe('M-7: block id preservation on revision', () => {
+  const before = {
+    id: 'p-old',
+    name: 'Kasir',
+    slug: 'kasir',
+    prompt: 'sistem kasir untuk klinik',
+    tables: [],
+    screens: [
+      {
+        id: 's-kasir',
+        name: 'Kasir',
+        blocks: [
+          { id: 'b-nav', kind: 'navbar', title: 'Kasir', body: 'Kasir' },
+          { id: 'b-stat', kind: 'stat', title: 'Total', body: '0' },
+        ],
+      },
+    ],
+  }
+
+  const screenWith = (blocks: unknown[]) => ({
+    name: 'Kasir',
+    slug: 'kasir',
+    tables: [],
+    screens: [{ id: 's-kasir', name: 'Kasir', blocks }],
+  })
+
+  it('warns when a returning screen came back with every block renumbered', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const client = clientReturning(
+      JSON.stringify(
+        screenWith([
+          { id: 'blk-1', kind: 'navbar', title: 'Kasir', body: 'Kasir' },
+          { id: 'blk-2', kind: 'stat', title: 'Total', body: '0' },
+        ]),
+      ),
+    )
+
+    await reviseProject(client, before, 'tambah kolom alergi', new AbortController().signal)
+
+    const events = warn.mock.calls.map((c) => JSON.stringify(c))
+    expect(events.some((e) => e.includes('renumbered-blocks'))).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('does not warn when the model kept the ids it was asked to keep', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const client = clientReturning(
+      JSON.stringify(
+        screenWith([
+          { id: 'b-nav', kind: 'navbar', title: 'Kasir', body: 'Kasir' },
+          { id: 'b-stat', kind: 'stat', title: 'Total', body: '12' },
+        ]),
+      ),
+    )
+
+    await reviseProject(client, before, 'perbarui angka', new AbortController().signal)
+
+    const events = warn.mock.calls.map((c) => JSON.stringify(c))
+    expect(events.some((e) => e.includes('renumbered-blocks'))).toBe(false)
+    warn.mockRestore()
+  })
+
+  /** A legitimately deleted block is not renumbering: keeping some ids is the signal. */
+  it('does not warn when the instruction removed a block but kept the rest', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const client = clientReturning(
+      JSON.stringify(
+        screenWith([{ id: 'b-nav', kind: 'navbar', title: 'Kasir', body: 'Kasir' }]),
+      ),
+    )
+
+    await reviseProject(client, before, 'hapus blok statistik', new AbortController().signal)
+
+    const events = warn.mock.calls.map((c) => JSON.stringify(c))
+    expect(events.some((e) => e.includes('renumbered-blocks'))).toBe(false)
+    warn.mockRestore()
+  })
+})
