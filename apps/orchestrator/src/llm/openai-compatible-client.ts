@@ -14,7 +14,16 @@ interface ChatCompletionResponse {
   usage?: { prompt_tokens?: number; completion_tokens?: number }
 }
 
+/** 5xx: transient, so a short pause is enough. M-4 pins this at 500 ms. */
 const RETRY_BACKOFF_MS = 500
+
+/**
+ * 429 without a `Retry-After` header.
+ *
+ * Deliberately four times the 5xx backoff. A 5xx is a hiccup and a quick retry is reasonable;
+ * a 429 means the provider is actively throttling us, so retrying sooner than it asked is how
+ * a soft limit becomes a lockout. M-4 pins this at 2 000 ms.
+ */
 const DEFAULT_RETRY_AFTER_MS = 2_000
 
 type AttemptResult =
@@ -41,11 +50,24 @@ export class OpenAiCompatibleClient implements LlmClient {
 
     if (!first.retryable) throw first.error
 
-    await this.sleep(first.retryAfterMs ?? RETRY_BACKOFF_MS, request.signal)
+    /**
+     * The fallback depends on why we are retrying. A 429 without `Retry-After` waits the
+     * longer rate-limit pause; anything else retryable is a 5xx and gets the short backoff.
+     * Using one constant for both would either retry a throttle far too fast or make every
+     * transient error cost two seconds.
+     */
+    const backoff = first.retryAfterMs ?? this.defaultBackoffFor(first.error)
+
+    await this.sleep(backoff, request.signal)
 
     const second = await this.attempt(request)
     if (second.ok) return second.value
     throw second.error
+  }
+
+  /** Which pause applies when the provider did not tell us how long to wait. */
+  private defaultBackoffFor(error: LlmError): number {
+    return error instanceof LlmRateLimitError ? DEFAULT_RETRY_AFTER_MS : RETRY_BACKOFF_MS
   }
 
   private async attempt(request: LlmRequest): Promise<AttemptResult> {

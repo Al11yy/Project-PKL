@@ -248,3 +248,64 @@ describe('OpenAiCompatibleClient', () => {
     }
   })
 })
+
+/**
+ * M-4 pins two different fallback delays, and the existing tests could not see either one:
+ * they all send `retry-after: 0`, so a 429 and a 5xx were indistinguishable. These assert
+ * the wait itself, which is the part that matters — retrying a throttle sooner than the
+ * provider asked is how a soft rate limit becomes a lockout.
+ */
+describe('M-4: retry backoff defaults', () => {
+  it('waits 2 000 ms before retrying a 429 that sent no Retry-After', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({}, { status: 429 }))
+      .mockResolvedValueOnce(jsonResponse(okBody()))
+
+    vi.useFakeTimers()
+    const promise = client().complete(request())
+    await vi.advanceTimersByTimeAsync(1_999)
+
+    // Still waiting at 1 999 ms: the retry has not fired yet.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await promise
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('waits only 500 ms before retrying a 5xx', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({}, { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse(okBody()))
+
+    vi.useFakeTimers()
+    const promise = client().complete(request())
+    await vi.advanceTimersByTimeAsync(500)
+    await promise
+
+    // 500 ms is enough for a transient error, and proves the two paths differ.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('prefers the Retry-After header over the default', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({}, { status: 429, headers: { 'retry-after': '5' } }))
+      .mockResolvedValueOnce(jsonResponse(okBody()))
+
+    vi.useFakeTimers()
+    const promise = client().complete(request())
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    // The header said 5 s, so the 2 s default must not have fired the retry.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(3_000)
+    await promise
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+})
