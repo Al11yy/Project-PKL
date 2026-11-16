@@ -67,6 +67,34 @@ export function Preview() {
   )
 }
 
+/**
+ * Maps a block to its renderer.
+ *
+ * Exhaustive by construction: `BlockKind` is derived from `WHITELISTED_KINDS`, so the
+ * `never` assignment below turns a newly whitelisted kind into a compile error until it
+ * has a branch here. That is what stops the whitelist and the renderer from drifting —
+ * the exact failure that left `form`, `card` and `chart` declared but unrenderable.
+ */
+function renderBlock(
+  block: UIBlock,
+  inspectOpen: boolean,
+  selected: boolean,
+  onSelect: (id: string) => void,
+) {
+  switch (block.kind) {
+    case 'navbar':
+      return <NavBlock block={block} inspectOpen={inspectOpen} selected={selected} onSelect={onSelect} />
+    case 'stat':
+      return <StatBlock block={block} inspectOpen={inspectOpen} selected={selected} onSelect={onSelect} />
+    case 'table':
+      return <TableBlock block={block} inspectOpen={inspectOpen} selected={selected} onSelect={onSelect} />
+    default: {
+      const unreachable: never = block.kind
+      throw new Error(`Unhandled block kind: ${String(unreachable)}`)
+    }
+  }
+}
+
 function ScreenView({
   screen,
   inspectOpen,
@@ -104,16 +132,13 @@ function ScreenView({
 
       {rest.map((b) => (
         <div key={b.id} className="mt-3">
-          {b.kind === 'table' && (
-            <TableBlock
-              block={b}
-              inspectOpen={inspectOpen}
-              selected={selectedBlockId === b.id}
-              onSelect={onSelect}
-            />
-          )}
+          {renderBlock(b, inspectOpen, selectedBlockId === b.id, onSelect)}
         </div>
       ))}
+
+      {screen.blocks.length === 0 && (
+        <p className="py-10 text-center text-meta text-ink-meta">Layar ini belum memiliki blok.</p>
+      )}
     </div>
   )
 }
@@ -154,6 +179,17 @@ function NavBlock({
   )
 }
 
+/**
+ * Accent → token. `action` has no `ink` shade in the palette, so it uses the DEFAULT
+ * (`#2563EB`), which is the same value the inspector's swatch shows — the two must match
+ * or the panel would misrepresent what the screen will look like.
+ */
+const ACCENT_CLASS: Record<'warn' | 'action' | 'ok', string> = {
+  warn: 'text-warn-ink',
+  action: 'text-action',
+  ok: 'text-ok-ink',
+}
+
 function StatBlock({
   block,
   inspectOpen,
@@ -165,7 +201,9 @@ function StatBlock({
   selected: boolean
   onSelect: (id: string) => void
 }) {
-  const warn = block.accent === 'warn'
+  // Every accent the inspector offers maps to a token here. If one were missing, the
+  // panel would offer a colour that changes nothing — the failure M-5 exists to prevent.
+  const accentClass = block.accent ? ACCENT_CLASS[block.accent] : 'text-ink'
   return (
     <div
       onClick={() => inspectOpen && onSelect(block.id)}
@@ -173,9 +211,7 @@ function StatBlock({
     >
       <div className="text-[11.5px] font-medium text-ink-meta">{block.title}</div>
       <div
-        className={`tnum mt-0.5 font-mono text-[21px] font-bold tracking-[-0.02em] ${
-          warn ? 'text-warn-ink' : 'text-ink'
-        }`}
+        className={`tnum mt-0.5 font-mono text-[21px] font-bold tracking-[-0.02em] ${accentClass}`}
       >
         {block.body}
       </div>

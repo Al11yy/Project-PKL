@@ -1,4 +1,38 @@
 import { chromium } from 'playwright'
+
+/**
+ * The render path must never introduce a markup sink. The product rule is that the model
+ * emits validated JSON mapped onto whitelisted blocks, and `dangerouslySetInnerHTML` would
+ * bypass that entirely — one call is enough to turn a data field into script execution.
+ * Checked here, before the browser starts, so a violation fails fast and loudly.
+ */
+const { readdirSync, readFileSync, statSync } = await import('node:fs')
+const { join } = await import('node:path')
+
+const BANNED = /dangerouslySetInnerHTML|new Function|eval\(/
+const offenders = []
+
+function scan(dir) {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    if (statSync(full).isDirectory()) {
+      scan(full)
+    } else if (/\.(ts|tsx)$/.test(entry)) {
+      readFileSync(full, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          // `eval(` also matches `retrieval(`; require a non-word char before it.
+          if (BANNED.test(line) && !/[\w.]eval\(/.test(line)) {
+            offenders.push(`${full}:${i + 1}`)
+          }
+        })
+    }
+  }
+}
+
+scan('src')
+console.log('BANNED MARKUP API:', offenders.length ? offenders.join(', ') : 'none')
+
 const b = await chromium.launch()
 const errs = []
 

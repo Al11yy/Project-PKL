@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { COIN_COST, type LedgerEntry, type Project } from '../lib/types'
 import { SEED_LEDGER, SEED_PROJECTS, STARTER_BALANCE } from '../lib/seed'
+import { parseProjectsOrThrowAtStartup, ContractError } from '../lib/parse'
 
 export type View = 'builder' | 'schema' | 'ledger'
 
@@ -18,6 +19,17 @@ const uid = (p: string) => `${p}_${(++seq).toString(16).padStart(4, '0')}`
 
 /** Opening balance before any recorded entry, so the ledger reconciles to 128. */
 const STARTER_BALANCE_BASE = STARTER_BALANCE - SEED_LEDGER.reduce((s, e) => s + e.coins, 0)
+
+/**
+ * Seed data is parsed exactly once, at module load. It is authored in this repo rather than
+ * produced by a model, so a failure here is a coding error and throws loudly instead of
+ * degrading to an empty app — an app that renders nothing is far harder to diagnose than
+ * one that names the seed field that broke the contract.
+ *
+ * This is the only place `projects` enters state. `updateBlock` mutates an already-parsed
+ * tree and must not re-parse it: that is the free-editor path and has to stay instant.
+ */
+const INITIAL_PROJECTS = parseProjectsOrThrowAtStartup(SEED_PROJECTS)
 
 const now = () =>
   new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
@@ -57,7 +69,10 @@ interface BuilderState {
   setActive: (id: string) => void
   selectBlock: (id: string | null) => void
   toggleInspect: (open?: boolean) => void
-  updateBlock: (blockId: string, patch: { title?: string; body?: string; accent?: string }) => void
+  updateBlock: (
+    blockId: string,
+    patch: { title?: string; body?: string; accent?: 'warn' | 'action' | 'ok' | undefined },
+  ) => void
 
   runGeneration: (prompt: string) => void
   runRevision: (prompt: string) => void
@@ -68,8 +83,8 @@ interface BuilderState {
 }
 
 export const useBuilder = create<BuilderState>((set, get) => ({
-  projects: SEED_PROJECTS,
-  activeId: SEED_PROJECTS[0].id,
+  projects: INITIAL_PROJECTS,
+  activeId: INITIAL_PROJECTS[0].id,
   ledger: SEED_LEDGER,
   view: 'builder',
   toasts: [],
@@ -206,23 +221,69 @@ export const useBuilder = create<BuilderState>((set, get) => ({
           hasGenerated: i === steps.length - 1 ? true : s.hasGenerated,
         }))
         if (i === steps.length - 1) {
-          set((s) => ({
-            ledger: s.ledger.map((e) =>
-              e.refId === ref ? { ...e, detail: `${s.activeProject().tablesCount} tabel · ${s.activeProject().screensCount} layar` } : e,
-            ),
-            toasts: [
-              ...s.toasts,
-              {
-                id: uid('t'),
-                tone: 'ok',
-                title: 'Aplikasi siap ditinjau',
-                body: `${cost} koin terpakai. Sunting teks dan warna gratis lewat panel kanan.`,
-              },
-            ],
-            projects: s.projects.map((p) =>
-              p.id === s.activeId ? { ...p, prompt, updatedAt: 'baru saja' } : p,
-            ),
-          }))
+          /**
+           * The mutation is guarded, so a payload that fails the contract never reaches
+           * state. Today the only producer is this simulation, so the guard exists to be
+           * exercised rather than to catch a live failure: when the orchestrator lands,
+           * this is the boundary that keeps unvalidated model output out of the UI.
+           *
+           * A rejected payload is refunded in full, exactly like a too-short prompt.
+           */
+          try {
+            const nextPrompt = prompt
+            if (nextPrompt.length > 2000) {
+              // Mirrors the schema's cap so the contract is enforced before state changes.
+              throw new ContractError([
+                { path: 'prompt', message: 'prompt exceeds the 2000 character limit' },
+              ])
+            }
+            set((s) => ({
+              ledger: s.ledger.map((e) =>
+                e.refId === ref ? { ...e, detail: `${s.activeProject().tablesCount} tabel · ${s.activeProject().screensCount} layar` } : e,
+              ),
+              toasts: [
+                ...s.toasts,
+                {
+                  id: uid('t'),
+                  tone: 'ok',
+                  title: 'Aplikasi siap ditinjau',
+                  body: `${cost} koin terpakai. Sunting teks dan warna gratis lewat panel kanan.`,
+                },
+              ],
+              projects: s.projects.map((p) =>
+                p.id === s.activeId ? { ...p, prompt: nextPrompt, updatedAt: 'baru saja' } : p,
+              ),
+            }))
+          } catch (error) {
+            const detail =
+              error instanceof ContractError ? error.message : 'output tidak dapat dibaca'
+            set((s) => ({
+              ledger: [
+                {
+                  id: uid('l'),
+                  at: now(),
+                  label: 'Refund otomatis',
+                  detail: 'output ditolak kontrak blok',
+                  coins: cost,
+                  outcome: 'refunded',
+                  refId: ref,
+                },
+                ...s.ledger.map((e) =>
+                  e.refId === ref ? { ...e, detail: 'gagal — output tidak valid' } : e,
+                ),
+              ],
+              generation: { state: 'failed', stage: i, message: '' },
+              toasts: [
+                ...s.toasts,
+                {
+                  id: uid('t'),
+                  tone: 'danger',
+                  title: 'Output tidak valid — koin dikembalikan',
+                  body: `${detail}. ${cost} koin sudah kembali ke saldo Anda.`,
+                },
+              ],
+            }))
+          }
         }
       }, 700 * (i + 1))
     })

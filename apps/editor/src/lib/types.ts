@@ -1,3 +1,24 @@
+import type {
+  BlockKind,
+  ParsedColumn,
+  ParsedProject,
+  ParsedScreen,
+  ParsedTable,
+  ParsedUIBlock,
+} from './contract'
+
+/**
+ * Structural types come from the Zod schema — the schema is the definition and these are
+ * its shadows. Keeping the union in one place means the whitelist, the runtime check and
+ * the TypeScript type cannot drift apart.
+ */
+export type { BlockKind }
+export type UIBlock = ParsedUIBlock
+export type Screen = ParsedScreen
+export type Project = ParsedProject
+export type Table = ParsedTable
+export type Column = ParsedColumn
+
 export const COIN_COST = {
   generate: 20,
   revise: 5,
@@ -16,52 +37,6 @@ export const PIPELINE: { id: PipelineStage; label: string }[] = [
 ]
 
 export type StageState = 'done' | 'active' | 'pending'
-
-export interface Column {
-  name: string
-  type: 'INTEGER' | 'TEXT' | 'REAL' | 'BOOLEAN'
-  primary?: boolean
-  nullable?: boolean
-  note?: string
-}
-
-export interface Table {
-  name: string
-  columns: Column[]
-  rows: number
-}
-
-export type BlockKind = 'navbar' | 'stat' | 'table' | 'form' | 'card' | 'chart'
-
-export interface UIBlock {
-  id: string
-  kind: BlockKind
-  /** Text the inspector may edit. Never markup. */
-  title?: string
-  /** Editable copy lines, in reading order. */
-  body?: string
-  /** Editable accent for this block, drawn from the palette. */
-  accent?: string
-}
-
-export interface Screen {
-  id: string
-  name: string
-  blocks: UIBlock[]
-}
-
-export interface Project {
-  id: string
-  name: string
-  slug: string
-  prompt: string
-  tables: Table[]
-  screens: Screen[]
-  tablesCount: number
-  screensCount: number
-  status: 'draft' | 'live'
-  updatedAt: string
-}
 
 export interface LedgerEntry {
   id: string

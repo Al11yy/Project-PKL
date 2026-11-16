@@ -1,7 +1,14 @@
 import { useBuilder } from '../../store/useBuilder'
+import type { Accent } from '../../lib/contract'
 import { IconClose, IconSliders } from '../ui/Icons'
 
-const ACCENTS = [
+/**
+ * `default` clears the accent rather than setting one, so it is not part of `Accent`.
+ * The rest are typed against the contract, which means adding an accent here without
+ * adding it to `ACCENT_VALUES` is a compile error rather than a control that silently
+ * does nothing.
+ */
+const ACCENTS: { id: 'default' | Accent; label: string; swatch: string }[] = [
   { id: 'default', label: 'Netral', swatch: '#111827' },
   { id: 'warn', label: 'Peringatan', swatch: '#B45309' },
   { id: 'action', label: 'Aksi', swatch: '#2563EB' },
