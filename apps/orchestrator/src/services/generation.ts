@@ -308,21 +308,46 @@ export function renumberedBlockScreens(
 /**
  * Words that ask for a removal. Indonesian instructions arrive in mixed register, so this
  * covers the verb forms ("hapus", "menghapus", "dihapus") and the common English synonyms.
+ *
+ * "hilangkan" and "buang" were in the first version of this list and are gone: they are also
+ * how a user says "hide" or "clean up" about something that is not a screen, and in testing
+ * "hilangkan layar" — which reads as *hide* the screen — was treated as a request to delete
+ * it. Only unambiguous deletion verbs stay; the cost of a missed synonym is a refusal the
+ * user can retry, while the cost of a loose one is silently deleting their work.
  */
-const REMOVAL_INTENT = /\b(hapus|menghapus|dihapus|remove|delete|hilangkan|buang|drop)\b/i
+const REMOVAL_VERB = /\b(hapus|menghapus|dihapus|remove|delete|drop)\b/i
 
 /**
- * Whether an instruction asked for something to be removed at all.
+ * English puts the object after the verb ("remove the Laporan screen") and Indonesian keeps
+ * it close too ("hapus layar laporan"). Requiring the word for "screen" nearby is what stops
+ * "hapus kolom alergi" from licensing the loss of a whole screen.
+ */
+const SCREEN_NOUN = /\b(layar|screen|halaman)\b/i
+
+/**
+ * A negation in front of the verb inverts it: "jangan hapus layar laporan" asks to *keep* it.
+ * Checked before the verb, because the earlier version saw "hapus" and concluded the
+ * opposite of what the user wanted.
+ */
+const NEGATED_REMOVAL =
+  /\b(jangan|tidak|jng|bukan|do not|don't|dont|never)\b[^.!?]{0,24}\b(hapus|menghapus|remove|delete|drop)\b/i
+
+/**
+ * Whether the instruction asked for a screen to be removed.
  *
- * This is deliberately coarse — one verb for any noun. The alternative, matching the removal
- * verb to a specific screen name, needs the model's own wording and would fail on "hapus
- * layar kedua" or "hapus semua layar laporan dan stok". A false positive here does not lose
- * data: it downgrades a rejection to a warning, and the screen really is gone, which is what
- * the user asked for. A false negative would reject a legitimate deletion, so the check errs
- * toward permitting removal rather than forbidding it.
+ * Both parts are required: a deletion verb *and* the noun "screen", not negated. This is a
+ * heuristic and it stays a narrow one. A false negative refuses a legitimate deletion — the
+ * user retries or deletes by hand, and nothing is lost. A false positive lets the model
+ * discard a screen the user never offered up, which is exactly the bug M-7 exists to stop.
+ * Given that asymmetry the check errs toward refusing.
+ *
+ * "Hapus layar kedua" still passes on the noun; matching the verb to a specific screen name
+ * is deliberately not attempted, because the model's own naming of screens is not what the
+ * user types.
  */
 export function instructionRequestsRemoval(instruction: string): boolean {
-  return REMOVAL_INTENT.test(instruction)
+  if (NEGATED_REMOVAL.test(instruction)) return false
+  return REMOVAL_VERB.test(instruction) && SCREEN_NOUN.test(instruction)
 }
 
 export function droppedScreenIds(
