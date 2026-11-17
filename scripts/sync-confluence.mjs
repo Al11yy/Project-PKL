@@ -58,7 +58,8 @@ const GENERATED_BANNER =
   '</ac:rich-text-body></ac:structured-macro>\n'
 
 const DOCS = [
-  { file: 'prd_ai_first_app_builder.md', title: 'PRD — AI-First App Builder', group: 'Produk' },  { file: 'PRODUCT.md', title: 'Product Overview', group: 'Produk' },
+  { file: 'prd_ai_first_app_builder.md', title: 'PRD — AI-First App Builder', group: 'Produk' },
+  { file: 'PRODUCT.md', title: 'Product Overview', group: 'Produk' },
   { file: '.amanah/atlas/product.md', title: 'Atlas — Product', group: 'Atlas' },
   { file: '.amanah/atlas/tech.md', title: 'Atlas — Technology Stack', group: 'Atlas' },
   { file: '.amanah/atlas/structure.md', title: 'Atlas — Struktur & Pattern', group: 'Atlas' },
