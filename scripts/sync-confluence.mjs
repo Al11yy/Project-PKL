@@ -44,9 +44,21 @@ const ROOT_BODY =
   'Jangan menyunting isi halaman anak secara langsung — perubahan akan tertimpa pada sinkronisasi berikutnya. ' +
   'Ubah markdown di repository, lalu jalankan ulang skripnya.</p>'
 
+/**
+ * Prefixed to every child page body. Added here rather than in the markdown so the
+ * local files stay clean and no document can forget it. Rendered as a Confluence
+ * info panel, which is visually distinct from body content and cannot be missed.
+ */
+const GENERATED_BANNER =
+  '<ac:structured-macro ac:name="info"><ac:rich-text-body>' +
+  '<p><strong>Halaman ini dihasilkan otomatis</strong> oleh <code>scripts/sync-confluence.mjs</code> ' +
+  'dari repository. Jangan menyunting langsung di Confluence — perubahan akan tertimpa ' +
+  'pada sinkronisasi berikutnya.</p>' +
+  '<p>Ubah file sumbernya di repository, lalu jalankan ulang skripnya.</p>' +
+  '</ac:rich-text-body></ac:structured-macro>\n'
+
 const DOCS = [
-  { file: 'prd_ai_first_app_builder.md', title: 'PRD — AI-First App Builder', group: 'Produk' },
-  { file: 'PRODUCT.md', title: 'Product Overview', group: 'Produk' },
+  { file: 'prd_ai_first_app_builder.md', title: 'PRD — AI-First App Builder', group: 'Produk' },  { file: 'PRODUCT.md', title: 'Product Overview', group: 'Produk' },
   { file: '.amanah/atlas/product.md', title: 'Atlas — Product', group: 'Atlas' },
   { file: '.amanah/atlas/tech.md', title: 'Atlas — Technology Stack', group: 'Atlas' },
   { file: '.amanah/atlas/structure.md', title: 'Atlas — Struktur & Pattern', group: 'Atlas' },
@@ -371,7 +383,7 @@ async function main() {
     }
 
     const md = await readFile(abs, 'utf8')
-    const storage = markdownToStorage(md)
+    const storage = GENERATED_BANNER + markdownToStorage(md)
     let existing
     try {
       existing = await findPageByTitle(doc.title)

@@ -11,8 +11,57 @@ app, deployed to Cloudflare.
 The complete requirements live in [prd_ai_first_app_builder.md](prd_ai_first_app_builder.md).
 That document is the source of truth for *what* to build.
 
-**Current state: documentation only.** There is no source code yet. Do not assume files
-exist — verify with glob/grep before citing a path.
+**Current state: working monorepo, pre-MVP.** Code exists for the editor, the
+orchestrator, and the shared contract. Still absent: persistence, auth, coin ledger,
+Cloudflare provisioning, and Midtrans. Do not assume a file exists — verify with
+glob/grep before citing a path.
+
+### Workspace layout
+
+npm workspaces, root `package.json` owns the scripts.
+
+```
+apps/editor/         @rakit/editor        Vite + React + Tailwind + Zustand
+apps/orchestrator/   @rakit/orchestrator  Express + TypeScript; LLM client, routes, services
+packages/schema/     @rakit/schema        Zod contract shared by both apps
+tools/               dev harnesses (see below), not published
+```
+
+| What is built | Evidence |
+|---------------|----------|
+| Editor UI, 4 views (editor / skema / riwayat) | `apps/editor/src/components/` |
+| Component whitelist + Zod contract | `packages/schema/src/contract.ts` |
+| Orchestrator HTTP surface | `apps/orchestrator/src/routes/` |
+| LLM provider seam (OpenAI-compatible) | `apps/orchestrator/src/llm/` |
+| System prompt builder | `apps/orchestrator/src/prompt/` |
+| Unit tests (144 across 7 files) | `**/*.test.ts` |
+
+| What is NOT built | Consequence |
+|-------------------|-------------|
+| Persistence of any kind | State is in-memory; reload loses work |
+| Auth | Do not expose the orchestrator |
+| Coin ledger on the server | `COIN_COST` is a client constant; nothing enforces it |
+| Cloudflare D1 / Workers / Pages | Publish is simulated |
+| Midtrans | `topUp()` credits locally with no verification |
+| `packages/generator/` | DDL generation has no home yet |
+
+`@rakit/schema` is imported as source (`"main": "./src/index.ts"`), not built to `dist/`.
+TypeScript resolves it directly, so there is no build step between the packages.
+
+### Dev commands (root)
+
+```bash
+npm run dev:all        # editor + orchestrator together
+npm test               # vitest across all workspaces
+npm run typecheck      # tsc --noEmit across all workspaces
+npm run fake-llm       # stub LLM provider, no API key needed
+npm run smoke          # end-to-end smoke against the fake provider
+npm run smoke:refusal  # asserts the model's refusals surface correctly
+npm run check:branches # guard for the ID-preservation invariants
+```
+
+The editor also runs standalone: `cd apps/editor && npm run dev` (port 5180,
+`strictPort` — a second instance fails rather than picking another port).
 
 ### Locked stack decisions
 
@@ -39,17 +88,17 @@ exist — verify with glob/grep before citing a path.
 
 ## Project Context Maps (Atlas)
 
-Read `.amanah/atlas/*.md` before planning or modifying any feature. These are generated
-from the PRD and describe the intended architecture:
+Read `.amanah/atlas/*.md` before planning or modifying any feature:
 
 - `product.md` — product concepts, personas, business model, core rules
 - `tech.md` — stack, services, databases, billing mechanics
-- `structure.md` — target directory layout, code patterns, file locations
+- `structure.md` — directory layout, code patterns, file locations
 - `conventions.md` — naming, gotchas, security non-negotiables
 - `quickstart.md` — copy-paste recipes for common tasks
 
-`/atlas` regenerates these. **Run it once real code exists** — the current atlas is
-PRD-derived, not code-derived.
+They were last regenerated from code on **2026-07-15**, so they predate the orchestrator
+and the schema package. Where an atlas file and the code disagree, **the code wins** — then
+fix the atlas. `/atlas` regenerates all five; it is overdue.
 
 ## Feature Blueprints
 
@@ -79,18 +128,29 @@ Blueprints live in `.amanah/blueprints/{feature-name}/`:
 Full Mode generates `what.md` → `how.md` → `now.md` **one file at a time**, pausing for
 review after each. Lite Mode (bugs, ≤5 files) generates a single `fix.md`.
 
+## Documentation publishing
+
+Repository docs are published to Confluence at
+`amanahagentdeveloper.atlassian.net/wiki`, space `developer amanahagent`, beneath the page
+*AI-First App Builder — Knowledge Base*.
+
+```bash
+node scripts/sync-confluence.mjs                    # dry run (default)
+node scripts/sync-confluence.mjs --apply             # publish all
+node scripts/sync-confluence.mjs --apply --file TODO.md   # one document
+```
+
+Pages are matched **by title**, never by id — renaming a heading locally does not create a
+duplicate page. Every child page carries an auto-generated banner; editing a page in
+Confluence is lost on the next sync. Change the markdown here instead.
+
+Requires `CONFLUENCE_BASE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_API_TOKEN`, and
+`CONFLUENCE_SPACE_KEY` in `.env`. `.env` and `.mcp.json` are both gitignored.
+
 ## Setup status
 
-- Commands: installed in `.claude/commands/` (12 commands)
-- Atlas: generated in `.amanah/atlas/` (5 files, PRD-derived)
-- Skills/agents: **not installed** — `.claude/skills/` and `.claude/agents/` do not exist
-  yet. The source files are in `.amanah/SKILL.md`, `.amanah/atlas-generator/SKILL.md`, and
-  `.amanah/AGENT.md`. Install them by copying those files to:
-
-  ```
-  .amanah/SKILL.md                      → .claude/skills/amanah-blueprint/SKILL.md
-  .amanah/atlas-generator/SKILL.md      → .claude/skills/amanah-atlas-generator/SKILL.md
-  .amanah/AGENT.md                      → .claude/agents/amanah-blueprint-generator.agent.md
-  ```
-
-  Until then, read the `.amanah/` sources directly.
+- Commands: installed in `.claude/commands/`
+- Atlas: generated in `.amanah/atlas/`, **stale** (see above)
+- Skills/agents: includes the `impeccable` skill and its 4 agents under `.claude/`. The
+  Amanah framework sources live in `.amanah/SKILL.md`, `.amanah/atlas-generator/SKILL.md`,
+  and `.amanah/AGENT.md`; read them directly if the corresponding skill is not installed.
