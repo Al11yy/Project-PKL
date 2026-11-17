@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ContractError, projectSchema } from '@rakit/schema'
-import { checkPrompt, generateProject, parseEnvelope, reviseProject } from './generation'
+import {
+  checkPrompt,
+  generateProject,
+  instructionRequestsRemoval,
+  parseEnvelope,
+  reviseProject,
+} from './generation'
 import { ApiErrorException, RevisionConflictError } from '../errors'
 import { clientReturning, validLlmProject, validProjectJson, clientProject } from '../testing/fixtures'
 
@@ -344,5 +350,39 @@ describe('M-7: block id preservation on revision', () => {
     const events = warn.mock.calls.map((c) => JSON.stringify(c))
     expect(events.some((e) => e.includes('renumbered-blocks'))).toBe(false)
     warn.mockRestore()
+  })
+})
+
+/**
+ * The removal heuristic decides whether a dropped screen is a bug or the requested change, so
+ * both directions are wrong in different ways: too loose deletes the user's work, too strict
+ * refuses their instruction. Each case here is one that a live browser run exposed or that
+ * the asymmetry predicts.
+ */
+describe('instructionRequestsRemoval', () => {
+  it.each([
+    ['hapus layar s-laporan', true],
+    ['hapus layar laporan dari aplikasi', true],
+    ['remove the Laporan screen', true],
+    ['tolong hapus halaman stok', true],
+    ['hapus layar kedua', true],
+  ])('reads a real screen deletion: %s', (instruction, expected) => {
+    expect(instructionRequestsRemoval(instruction)).toBe(expected)
+  })
+
+  it.each([
+    // Says "hide", not "delete" — was treated as a deletion before a live run caught it.
+    ['hilangkan layar', false],
+    // Negated: the user wants the screen kept.
+    ['jangan hapus layar s-laporan', false],
+    ['tidak perlu hapus layar pasien', false],
+    ['do not delete the Laporan screen', false],
+    // A deletion that is not about a screen must not license losing one.
+    ['hapus kolom alergi dari tabel', false],
+    ['hapus teks di navbar', false],
+    // Nothing about removal at all.
+    ['ubah judul jadi Kasir Baru', false],
+  ])('refuses to read a screen deletion: %s', (instruction, expected) => {
+    expect(instructionRequestsRemoval(instruction)).toBe(expected)
   })
 })
