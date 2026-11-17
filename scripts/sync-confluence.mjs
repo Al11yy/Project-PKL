@@ -31,9 +31,60 @@ import path from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
+/**
+ * Root page every synced document hangs beneath, so the space gets one navigable
+ * knowledge-base tree instead of a flat list of pages at the space root.
+ */
+const ROOT_TITLE = 'AI-First App Builder — Knowledge Base'
+const ROOT_BODY =
+  '<p>Indeks pengetahuan proyek <strong>Rakit.ai</strong> — AI-First App Builder untuk Indonesia. ' +
+  'Setiap halaman di bawah ini disinkronkan dari repository dan merupakan turunan dari ' +
+  'sumber kebenaran yang sama (<code>prd_ai_first_app_builder.md</code> dan kode di <code>apps/</code>).</p>' +
+  '<p>Halaman ini dihasilkan otomatis oleh <code>scripts/sync-confluence.mjs</code>. ' +
+  'Jangan menyunting isi halaman anak secara langsung — perubahan akan tertimpa pada sinkronisasi berikutnya. ' +
+  'Ubah markdown di repository, lalu jalankan ulang skripnya.</p>'
+
 const DOCS = [
-  { file: 'KNOWLEDGE_BASE.md', title: 'Rakit.ai — Knowledge Base' },
-  { file: 'TODO.md', title: 'Rakit.ai — Roadmap & TODO' },
+  { file: 'prd_ai_first_app_builder.md', title: 'PRD — AI-First App Builder', group: 'Produk' },
+  { file: 'PRODUCT.md', title: 'Product Overview', group: 'Produk' },
+  { file: '.amanah/atlas/product.md', title: 'Atlas — Product', group: 'Atlas' },
+  { file: '.amanah/atlas/tech.md', title: 'Atlas — Technology Stack', group: 'Atlas' },
+  { file: '.amanah/atlas/structure.md', title: 'Atlas — Struktur & Pattern', group: 'Atlas' },
+  { file: '.amanah/atlas/conventions.md', title: 'Atlas — Konvensi & Gotchas', group: 'Atlas' },
+  { file: '.amanah/atlas/quickstart.md', title: 'Atlas — Quickstart', group: 'Atlas' },
+  { file: 'KNOWLEDGE_BASE.md', title: 'Knowledge Base — Arsitektur Terpasang', group: 'Teknis' },
+  { file: 'CLAUDE.md', title: 'Panduan Kontributor & Aturan Agen', group: 'Teknis' },
+  { file: 'TODO.md', title: 'Roadmap & TODO', group: 'Teknis' },
+  {
+    file: '.amanah/blueprints/mvp-foundation/what.md',
+    title: 'Blueprint — MVP Foundation (What)',
+    group: 'Blueprint',
+  },
+  {
+    file: '.amanah/blueprints/mvp-foundation/how.md',
+    title: 'Blueprint — MVP Foundation (How)',
+    group: 'Blueprint',
+  },
+  {
+    file: '.amanah/blueprints/mvp-foundation/now.md',
+    title: 'Blueprint — MVP Foundation (Now)',
+    group: 'Blueprint',
+  },
+  {
+    file: '.amanah/blueprints/llm-orchestration/what.md',
+    title: 'Blueprint — LLM Orchestration (What)',
+    group: 'Blueprint',
+  },
+  {
+    file: '.amanah/blueprints/llm-orchestration/how.md',
+    title: 'Blueprint — LLM Orchestration (How)',
+    group: 'Blueprint',
+  },
+  {
+    file: '.amanah/blueprints/llm-orchestration/now.md',
+    title: 'Blueprint — LLM Orchestration (Now)',
+    group: 'Blueprint',
+  },
 ]
 
 const APPLY = process.argv.includes('--apply')
@@ -239,7 +290,7 @@ async function findPageByTitle(title) {
   return data?.results?.[0] ?? null
 }
 
-async function createPage(title, bodyStorage) {
+async function createPage(title, bodyStorage, parentId = CONFLUENCE_PARENT_ID) {
   // v1 is used for writes because it accepts a space *key* and an optional parent
   // id directly; v2 would require resolving the numeric spaceId first.
   return api(`${CONFLUENCE_BASE_URL}/rest/api/content`, {
@@ -248,13 +299,13 @@ async function createPage(title, bodyStorage) {
       type: 'page',
       title,
       space: { key: CONFLUENCE_SPACE_KEY },
-      ...(CONFLUENCE_PARENT_ID ? { ancestors: [{ id: CONFLUENCE_PARENT_ID }] } : {}),
+      ...(parentId ? { ancestors: [{ id: parentId }] } : {}),
       body: { storage: { value: bodyStorage, representation: 'storage' } },
     }),
   })
 }
 
-async function updatePage(pageId, title, bodyStorage) {
+async function updatePage(pageId, title, bodyStorage, parentId = CONFLUENCE_PARENT_ID) {
   // v1 requires the current version number so updates do not clobber each other.
   const current = await api(`${CONFLUENCE_BASE_URL}/rest/api/content/${pageId}?expand=version`)
   const nextVersion = (current?.version?.number ?? 1) + 1
@@ -266,9 +317,29 @@ async function updatePage(pageId, title, bodyStorage) {
       type: 'page',
       title,
       version: { number: nextVersion },
+      // Empty ancestors array moves a page back to the space root.
+      ancestors: parentId ? [{ id: parentId }] : [],
       body: { storage: { value: bodyStorage, representation: 'storage' } },
     }),
   })
+}
+
+/**
+ * Resolve the parent id for child pages. An explicit CONFLUENCE_PARENT_ID wins;
+ * otherwise the root page is created (or found) so the tree has a single top.
+ * Returns null on a dry run when the root does not exist yet, so the caller can
+ * report the intended shape without inventing an id.
+ */
+async function resolveParentId({ allowCreate }) {
+  if (CONFLUENCE_PARENT_ID) return CONFLUENCE_PARENT_ID
+
+  const existing = await findPageByTitle(ROOT_TITLE)
+  if (existing) return existing.id
+  if (!allowCreate) return null
+
+  const created = await createPage(ROOT_TITLE, ROOT_BODY)
+  console.log(`Root page created: ${ROOT_TITLE} (id ${created.id})\n`)
+  return created.id
 }
 
 async function main() {
@@ -283,19 +354,36 @@ async function main() {
   console.log(APPLY ? 'Mode: APPLY — pages will be written.' : 'Mode: DRY RUN — nothing will be written.')
   console.log(`Space: ${CONFLUENCE_SPACE_KEY}  ·  ${targets.length} document(s)\n`)
 
+  const parentId = await resolveParentId({ allowCreate: APPLY })
+  const parentForChild = parentId ? String(parentId) : null
+  if (!APPLY && !parentId) console.log(`Root page "${ROOT_TITLE}" does not exist — would be created.\n`)
+
+  let created = 0
+  let updated = 0
+  let skipped = 0
+
   for (const doc of targets) {
     const abs = path.resolve(process.cwd(), doc.file)
     if (!existsSync(abs)) {
       console.warn(`skip ${doc.file} — not found at ${abs}`)
+      skipped++
       continue
     }
 
     const md = await readFile(abs, 'utf8')
     const storage = markdownToStorage(md)
-    const existing = await findPageByTitle(doc.title)
+    let existing
+    try {
+      existing = await findPageByTitle(doc.title)
+    } catch (err) {
+      // A token without read scope on the space fails here rather than mid-write.
+      console.warn(`skip ${doc.file} — lookup failed: ${err.message}`)
+      skipped++
+      continue
+    }
 
     console.log(
-      `${doc.file}\n  title: ${doc.title}\n  exists: ${existing ? `yes (id ${existing.id})` : 'no'}` +
+      `${doc.file}\n  title: ${doc.title}\n  group: ${doc.group}\n  exists: ${existing ? `yes (id ${existing.id})` : 'no'}` +
         `\n  storage bytes: ${storage.length}`
     )
 
@@ -304,16 +392,26 @@ async function main() {
       continue
     }
 
-    if (existing) {
-      await updatePage(existing.id, doc.title, storage)
-      console.log('  → updated\n')
-    } else {
-      await createPage(doc.title, storage)
-      console.log('  → created\n')
+    try {
+      if (existing) {
+        // Re-parent explicitly: a page created before the root existed otherwise
+        // stays at the space root and the tree silently splits in two.
+        await updatePage(existing.id, doc.title, storage, parentForChild)
+        console.log('  → updated\n')
+        updated++
+      } else {
+        await createPage(doc.title, storage, parentForChild)
+        console.log('  → created\n')
+        created++
+      }
+    } catch (err) {
+      console.warn(`  → FAILED: ${err.message}\n`)
+      skipped++
     }
   }
 
-  if (!APPLY) console.log('Re-run with --apply to publish.')
+  if (APPLY) console.log(`Done: ${created} created, ${updated} updated, ${skipped} skipped.`)
+  else console.log('Re-run with --apply to publish.')
 }
 
 /**

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "confluence": {
+      "command": "uvx",
+      "args": ["mcp-atlassian"],
+      "env": {
+        "CONFLUENCE_URL": "https://<instansi>.atlassian.net/wiki",
+        "CONFLUENCE_USERNAME": "<email-atlassian>",
+        "CONFLUENCE_API_TOKEN": "<token-atlassian>"
+      }
+    }
+  }
+}
