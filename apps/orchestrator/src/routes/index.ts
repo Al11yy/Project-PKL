@@ -1,11 +1,11 @@
-import { Router, type NextFunction, type Request, type Response } from 'express'
+import { Hono } from 'hono'
 import { z } from 'zod'
 import { projectSchema } from '@rakit/schema'
 import type { LlmClient } from '../llm/client'
 import { LlmError, LlmTimeoutError } from '../llm/errors'
 import { generateProject, reviseProject } from '../services/generation'
 import { badRequest } from '../errors'
-
+import type { Env } from '../config'
 
 /**
  * Request bodies.
@@ -29,8 +29,25 @@ const reviseRequestSchema = z.object({
   instruction: z.string(),
 })
 
-function parseBody<T>(schema: z.ZodType<T>, req: Request, field: string): T {
-  const result = schema.safeParse(req.body)
+/**
+ * A body that failed to parse is reported as INVALID_REQUEST rather than allowed to throw.
+ *
+ * Under Express a malformed body surfaced as a middleware error; Hono's `c.req.json()` simply
+ * rejects. Catching it here keeps the promise the envelope makes — every failure has a `code`
+ * a client can branch on — instead of letting a SyntaxError become an opaque 500.
+ */
+async function readJson(c: {
+  req: { json: () => Promise<unknown> }
+}): Promise<unknown> {
+  try {
+    return await c.req.json()
+  } catch {
+    throw badRequest('INVALID_REQUEST', 'Isi permintaan tidak valid.')
+  }
+}
+
+function parseBody<T>(schema: z.ZodType<T>, raw: unknown, field: string): T {
+  const result = schema.safeParse(raw)
 
   if (!result.success) {
     throw badRequest(`INVALID_REQUEST`, `Field "${field}" tidak valid.`, {
@@ -45,19 +62,6 @@ function parseBody<T>(schema: z.ZodType<T>, req: Request, field: string): T {
 }
 
 /**
- * Wrap an async handler so a rejected promise reaches the error middleware.
- *
- * Express 4 does not await handlers: without this, a thrown error in an async function
- * becomes an unhandled rejection and the request hangs until it times out. Express 5 would
- * handle it, but the dependency is pinned to 4.
- */
-const asyncHandler =
-  (handler: (req: Request, res: Response) => Promise<void>) =>
-  (req: Request, res: Response, next: NextFunction): void => {
-    handler(req, res).catch(next)
-  }
-
-/**
  * An AbortController that also fires on a deadline.
  *
  * Q-2 requires that *no* code path awaits the provider without an active AbortController
@@ -68,6 +72,11 @@ const asyncHandler =
  *
  * The adapter keeps its own per-attempt timeout for retries; this is the outer bound that
  * spans the whole request, including backoff.
+ *
+ * `unref` is gone. It existed so a pending deadline would not hold a Node process open at
+ * shutdown; Workers have no process to hold open, and `unref` does not exist there. The
+ * optional call was a silent no-op on the Worker — deleting it removes a line that told a
+ * reader something untrue about the runtime.
  */
 function abortAfter(ms: number): {
   signal: AbortSignal
@@ -78,8 +87,6 @@ function abortAfter(ms: number): {
   const timer = setTimeout(() => {
     controller.abort(new LlmTimeoutError(ms))
   }, ms)
-  // `unref` so a pending deadline never keeps the process alive on shutdown.
-  timer.unref?.()
   return {
     signal: controller.signal,
     abort: () => controller.abort(),
@@ -102,94 +109,88 @@ const DEFAULT_TIMEOUT_MS = 60_000
  * bare AbortError maps to a generic 500, reporting a slow provider as a bug in this process.
  * Translating here means the bound holds for any `LlmClient`, not only the one adapter that
  * happens to be careful.
- *
- * A client that hung up is deliberately not a 504: nobody is waiting for that response, and
- * `res` is already closed. Re-throwing lets the normal path settle without a send.
  */
 async function underDeadline<T>(
   deadline: AbortSignal,
-  clientGone: () => boolean,
   run: () => Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
   try {
     return await run()
   } catch (error) {
-    if (deadline.aborted && !clientGone()) {
+    if (deadline.aborted) {
       throw error instanceof LlmError ? error : new LlmTimeoutError(timeoutMs)
     }
     throw error
   }
 }
 
-export function createRouter(client: LlmClient, timeoutMs: number = DEFAULT_TIMEOUT_MS): Router {
-  const router = Router()
+/**
+ * The `/api/v1` surface.
+ *
+ * `client` is injected so tests can drive the routes without a provider. `env` is read at
+ * request time rather than captured, because on a Worker the API key is a secret binding that
+ * is not available at module scope.
+ */
+export function createRouter(
+  client: LlmClient,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Hono<{ Bindings: Env }> {
+  const router = new Hono<{ Bindings: Env }>()
 
-  router.get('/health', (_req: Request, res: Response) => {
+  router.get('/health', (c) => {
     /**
      * Reports whether the key is present, never what it is, and does not call the provider.
      * A health check that spends tokens is a health check that gets disabled.
+     *
+     * Read from `c.env`, not `process.env`: on the Worker the key is a secret binding.
      */
-    res.json({
-      data: { status: 'ok', llmConfigured: Boolean(process.env.LLM_KITA_API_KEY) },
+    return c.json({
+      data: { status: 'ok', llmConfigured: Boolean(c.env?.LLM_KITA_API_KEY) },
       error: null,
     })
   })
 
-  router.post(
-    '/generate',
-    asyncHandler(async (req, res) => {
-      const body = parseBody(generateRequestSchema, req, 'prompt')
+  router.post('/generate', async (c) => {
+    const body = parseBody(generateRequestSchema, await readJson(c), 'prompt')
 
-      /**
-       * Two ways this call ends early: the deadline, and the client hanging up. Both abort
-       * the same signal, because either way nobody is waiting for the answer and the tokens
-       * are being paid for regardless.
-       */
-      const { signal, abort, dispose } = abortAfter(timeoutMs)
-      res.on('close', () => {
-        abort()
-        dispose()
-      })
+    /**
+     * Two ways this call ends early: the deadline, and the client hanging up. Hono exposes
+     * the request signal, so a disconnect aborts the provider call instead of leaving it to
+     * spend tokens for a response nobody will read.
+     */
+    const { signal, abort, dispose } = abortAfter(timeoutMs)
+    c.req.raw.signal.addEventListener('abort', () => abort())
 
-      try {
-        const outcome = await underDeadline(
-          signal,
-          () => res.writableEnded,
-          () => generateProject(client, body.prompt, signal),
-          timeoutMs,
-        )
-        res.json({ data: outcome, error: null })
-      } finally {
-        dispose()
-      }
-    }),
-  )
+    try {
+      const outcome = await underDeadline(
+        signal,
+        () => generateProject(client, body.prompt, signal),
+        timeoutMs,
+      )
+      return c.json({ data: outcome, error: null })
+    } finally {
+      dispose()
+    }
+  })
 
-  router.post(
-    '/revise',
-    asyncHandler(async (req, res) => {
-      const body = parseBody(reviseRequestSchema, req, 'instruction')
+  router.post('/revise', async (c) => {
+    const body = parseBody(reviseRequestSchema, await readJson(c), 'instruction')
 
-      const { signal, abort, dispose } = abortAfter(timeoutMs)
-      res.on('close', () => {
-        abort()
-        dispose()
-      })
+    const { signal, abort, dispose } = abortAfter(timeoutMs)
+    c.req.raw.signal.addEventListener('abort', () => abort())
 
-      try {
-        const outcome = await underDeadline(
-          signal,
-          () => res.writableEnded,
-          () => reviseProject(client, body.project, body.instruction, signal),
-          timeoutMs,
-        )
-        res.json({ data: outcome, error: null })
-      } finally {
-        dispose()
-      }
-    }),
-  )
+    try {
+      const outcome = await underDeadline(
+        signal,
+        () => reviseProject(client, body.project, body.instruction, signal),
+        timeoutMs,
+      )
+      return c.json({ data: outcome, error: null })
+    } finally {
+      dispose()
+    }
+  })
 
   return router
 }

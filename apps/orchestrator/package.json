@@ -4,24 +4,29 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@hono/node-server": "^1.19.19",
     "@rakit/schema": "*",
-    "express": "^4.21.1",
+    "hono": "^4.13.19",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/express": "^5.0.0",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@types/node": "^22.9.0",
-    "@types/supertest": "^6.0.2",
     "fast-check": "^3.23.1",
-    "supertest": "^7.0.0",
     "tsx": "^4.19.2",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.0",
+    "wrangler": "^4.164.0"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:worker": "wrangler dev",
+    "deploy": "wrangler deploy",
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply rakit-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply rakit-db --remote",
+    "db:list": "wrangler d1 migrations list rakit-db --local"
   }
 }

@@ -1,11 +1,35 @@
 /**
- * Configuration, read once at startup and validated.
+ * Configuration, read from an explicit environment object rather than `process.env`.
  *
- * Read eagerly rather than lazily on first use: a missing API key should stop the process
- * with a message naming the variable, not surface as a 502 on the first user request.
+ * The Worker has no `process.env`; its variables arrive as the second argument to `fetch` and
+ * reach the app as `c.env`. Rather than reach for a `nodejs_compat` polyfill, every function
+ * here takes the environment as a parameter. That makes the dependency visible in the
+ * signature — a reader can see that `loadLlmConfig` reads configuration and does not touch
+ * globals — and it is what lets the Node dev server and the Worker share one code path.
+ *
+ * Validated eagerly, at the edge of the request: a missing API key should be a message naming
+ * the variable, not a 502 on the first user request that looks like the provider's fault.
  * `conventions.md` requires an explicit timeout on every external call, so the timeout is
  * configuration with a stated default rather than a literal buried in the client.
  */
+
+/**
+ * The subset of bindings this module reads. Structurally typed rather than importing
+ * `Env` from the worker, so the pure unit tests can pass a plain object with no Cloudflare
+ * types in scope.
+ */
+export interface Env {
+  LLM_KITA_API_KEY?: string
+  LLM_KITA_BASE_URL?: string
+  LLM_KITA_MODEL?: string
+  LLM_TIMEOUT_MS?: string
+  LLM_MAX_TOKENS_GENERATE?: string
+  LLM_MAX_TOKENS_REVISE?: string
+  /** Node dev path only; a Worker ignores it. */
+  PORT?: string
+  DB?: D1Database
+}
+
 export interface LlmConfig {
   apiKey: string
   baseUrl: string
@@ -24,37 +48,38 @@ export class ConfigError extends Error {
   }
 }
 
-const required = (name: string): string => {
-  const value = process.env[name]
-  if (value === undefined || value.trim() === '') {
+const required = (env: Env, name: keyof Env): string => {
+  const value = env[name]
+  if (typeof value !== 'string' || value.trim() === '') {
     throw new ConfigError(
-      `Missing required environment variable ${name}. Copy .env.example and fill it in.`,
+      `Missing required environment variable ${String(name)}. Locally: copy .env.example to ` +
+        `.dev.vars and fill it in. Deployed: wrangler secret put ${String(name)}.`,
     )
   }
   return value
 }
 
-const positiveInt = (name: string, fallback: number): number => {
-  const raw = process.env[name]
-  if (raw === undefined || raw.trim() === '') return fallback
+const positiveInt = (env: Env, name: keyof Env, fallback: number): number => {
+  const raw = env[name]
+  if (typeof raw !== 'string' || raw.trim() === '') return fallback
 
   const parsed = Number.parseInt(raw, 10)
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new ConfigError(`${name} must be a positive integer, got "${raw}"`)
+    throw new ConfigError(`${String(name)} must be a positive integer, got "${raw}"`)
   }
   return parsed
 }
 
-export function loadLlmConfig(): LlmConfig {
+export function loadLlmConfig(env: Env): LlmConfig {
   return {
-    apiKey: required('LLM_KITA_API_KEY'),
+    apiKey: required(env, 'LLM_KITA_API_KEY'),
     // Trailing slashes stripped so the client can append `/chat/completions`
     // unconditionally without producing a double slash.
-    baseUrl: required('LLM_KITA_BASE_URL').replace(/\/+$/, ''),
-    model: required('LLM_KITA_MODEL'),
-    timeoutMs: positiveInt('LLM_TIMEOUT_MS', 60_000),
-    maxTokensGenerate: positiveInt('LLM_MAX_TOKENS_GENERATE', 8_000),
-    maxTokensRevise: positiveInt('LLM_MAX_TOKENS_REVISE', 12_000),
+    baseUrl: required(env, 'LLM_KITA_BASE_URL').replace(/\/+$/, ''),
+    model: required(env, 'LLM_KITA_MODEL'),
+    timeoutMs: positiveInt(env, 'LLM_TIMEOUT_MS', 60_000),
+    maxTokensGenerate: positiveInt(env, 'LLM_MAX_TOKENS_GENERATE', 8_000),
+    maxTokensRevise: positiveInt(env, 'LLM_MAX_TOKENS_REVISE', 12_000),
   }
 }
 
@@ -65,9 +90,11 @@ export interface ServerConfig {
 /**
  * Port 5181, not 5180: the editor's Vite server owns 5180 with `strictPort: true`, so a
  * collision is a hard startup failure rather than a fallback to another port.
+ *
+ * Node dev path only — a Worker has no port to choose.
  */
-export function loadServerConfig(): ServerConfig {
-  return { port: positiveInt('PORT', 5_181) }
+export function loadServerConfig(env: Env = {}): ServerConfig {
+  return { port: positiveInt(env, 'PORT', 5_181) }
 }
 
 /** Prompt bounds. Applied to the trimmed value — see `checkPrompt` in services/generation.ts. */

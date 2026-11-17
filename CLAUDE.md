@@ -12,9 +12,16 @@ The complete requirements live in [prd_ai_first_app_builder.md](prd_ai_first_app
 That document is the source of truth for *what* to build.
 
 **Current state: working monorepo, pre-MVP.** Code exists for the editor, the
-orchestrator, and the shared contract. Still absent: persistence, auth, coin ledger,
-Cloudflare provisioning, and Midtrans. Do not assume a file exists — verify with
-glob/grep before citing a path.
+orchestrator, and the shared contract. The orchestrator now runs on Cloudflare Workers
+(Hono), with a D1 schema and migrations in place. Still absent: auth, editor persistence,
+and per-project provisioning. Do not assume a file exists — verify with glob/grep before
+citing a path.
+
+**Billing was removed from the product.** There is no coin ledger, no balance, and no
+Midtrans. Quota and payment are handled entirely by the LLM-Kita account: the orchestrator
+forwards requests with an API key, and nothing in this repository meters or charges for them.
+Any `COIN_COST`, `topUp()`, or `balance()` still present in the editor is a leftover from the
+previous design and is scheduled for deletion — do not build on it.
 
 ### Workspace layout
 
@@ -22,27 +29,33 @@ npm workspaces, root `package.json` owns the scripts.
 
 ```
 apps/editor/         @rakit/editor        Vite + React + Tailwind + Zustand
-apps/orchestrator/   @rakit/orchestrator  Express + TypeScript; LLM client, routes, services
+apps/orchestrator/   @rakit/orchestrator  Hono + TypeScript; LLM client, routes, services
 packages/schema/     @rakit/schema        Zod contract shared by both apps
 tools/               dev harnesses (see below), not published
 ```
+
+The orchestrator has **two entry points into one app**: `src/worker.ts` (Cloudflare Worker,
+the deployment target) and `src/server.ts` (Node + `tsx watch`, the fast inner loop). Neither
+contains routing or business logic — both build `createApp()` from `src/app.ts`. Configuration
+arrives through an explicit `Env` object rather than `process.env`, which is what lets the same
+code run on both runtimes without a `nodejs_compat` polyfill.
 
 | What is built | Evidence |
 |---------------|----------|
 | Editor UI, 4 views (editor / skema / riwayat) | `apps/editor/src/components/` |
 | Component whitelist + Zod contract | `packages/schema/src/contract.ts` |
-| Orchestrator HTTP surface | `apps/orchestrator/src/routes/` |
+| Orchestrator HTTP surface (Hono) | `apps/orchestrator/src/routes/` |
 | LLM provider seam (OpenAI-compatible) | `apps/orchestrator/src/llm/` |
 | System prompt builder | `apps/orchestrator/src/prompt/` |
-| Unit tests (144 across 7 files) | `**/*.test.ts` |
+| Worker entry + D1 schema/migrations | `apps/orchestrator/src/worker.ts`, `migrations/` |
+| Unit tests (146 across 7 files) | `**/*.test.ts` |
 
 | What is NOT built | Consequence |
 |-------------------|-------------|
-| Persistence of any kind | State is in-memory; reload loses work |
-| Auth | Do not expose the orchestrator |
-| Coin ledger on the server | `COIN_COST` is a client constant; nothing enforces it |
-| Cloudflare D1 / Workers / Pages | Publish is simulated |
-| Midtrans | `topUp()` credits locally with no verification |
+| Editor persistence | Projects come from `seed.ts`; reload loses work |
+| Auth | Do not expose the orchestrator; `owner_id` is a placeholder |
+| Project repository (D1 reads/writes) | Tables exist, nothing queries them yet |
+| Per-project D1 / Workers provisioning | Publish is still simulated |
 | `packages/generator/` | DDL generation has no home yet |
 
 `@rakit/schema` is imported as source (`"main": "./src/index.ts"`), not built to `dist/`.
@@ -60,6 +73,16 @@ npm run smoke:refusal  # asserts the model's refusals surface correctly
 npm run check:branches # guard for the ID-preservation invariants
 ```
 
+Orchestrator, from `apps/orchestrator/`:
+
+```bash
+npm run dev              # Node + tsx watch on :5181 — fast inner loop
+npm run dev:worker       # wrangler dev on :8787 — real workerd isolate
+npm run db:migrate:local # apply migrations to the local D1
+npm run db:migrate:remote
+npm run deploy           # wrangler deploy
+```
+
 The editor also runs standalone: `cd apps/editor && npm run dev` (port 5180,
 `strictPort` — a second instance fails rather than picking another port).
 
@@ -68,22 +91,25 @@ The editor also runs standalone: `cd apps/editor && npm run dev` (port 5180,
 | Layer | Choice |
 |-------|--------|
 | Frontend editor | Vite + React + Tailwind CSS + Zustand (Cloudflare Pages) |
-| Backend core | Express.js (Node.js + TypeScript) |
+| Backend core | Hono on Cloudflare Workers (TypeScript) |
 | AI engine | API LLM-Kita (strict JSON output) |
-| User project DB | Cloudflare D1 (one database per project) |
-| User project compute | Cloudflare Workers |
-| Payments | Midtrans (QRIS / Virtual Account), IDR prepaid coins |
+| Platform DB | Cloudflare D1 — projects + revision history |
+| User project DB | Cloudflare D1 (one database per project) — not provisioned yet |
+| User project compute | Cloudflare Workers — not provisioned yet |
+| Payments | None. Billing lives in the LLM-Kita account. |
 
 ### Non-negotiable rules
 
 1. **The LLM never emits HTML or JS.** It returns JSON validated by Zod and mapped only to
    whitelisted Impeccable Style components. Reject unknown components.
-2. **Coins are deducted before the LLM call**, refunded on failure. Ledger-based, with
-   atomic conditional updates — never a bare mutable balance column.
-3. **Visual Fallback Editor edits cost zero coins.**
-4. **One D1 database per user project.** No cross-tenant tables.
-5. **No secrets in code** — env vars / Cloudflare secrets only. Generated Workers get no
-   platform secrets.
+2. **The platform does not meter usage.** No coins, no balance, no ledger, no payment
+   provider. Do not reintroduce a credit system without an explicit decision to do so.
+3. **A revision keeps the project's id.** `reviseProject` must never mint a new one; the id
+   identifies the row being updated and the history that belongs to it.
+4. **One D1 database per user project.** No cross-tenant tables in a generated app's database.
+   The platform database (`rakit-db`) holds metadata only, never user app data.
+5. **No secrets in code** — env vars / Cloudflare secrets only. `.dev.vars` and `.env` are
+   gitignored; generated Workers get no platform secrets.
 6. **All external calls have explicit timeouts.**
 
 ## Project Context Maps (Atlas)

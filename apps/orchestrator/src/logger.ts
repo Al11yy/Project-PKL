@@ -2,7 +2,11 @@
  * Minimal structured logger.
  *
  * Hand-rolled rather than a dependency: this blueprint needs three event levels and one
- * redaction rule, and `what.md` §10 caps new runtime dependencies at express.
+ * redaction rule, and `what.md` §10 caps new runtime dependencies at the HTTP framework.
+ *
+ * It writes through `console`, which is deliberate: `console.log` is captured by
+ * `wrangler tail` on Workers and by stdout on the Node dev path, so one implementation covers
+ * both runtimes with no adapter.
  *
  * Every value passes through `redact`, which is what makes the "no secret in any log" target
  * hold. Two categories are scrubbed:

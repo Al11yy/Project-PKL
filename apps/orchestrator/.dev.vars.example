@@ -1,0 +1,12 @@
+# Local secrets for `wrangler dev` (the Worker path).
+#
+# Copy to `.dev.vars` in this same directory and fill in the values:
+#   cp .dev.vars.example .dev.vars
+#
+# `.dev.vars` is gitignored. The real API key must never be written into `wrangler.toml`,
+# which IS committed — non-secret configuration belongs there, secrets belong here.
+#
+# Deployed Workers do not read this file. Use `wrangler secret put <NAME>` for the deployed
+# value; the two are independent stores and updating one does not update the other.
+
+LLM_KITA_API_KEY=isi-api-key-dari-llm-kita-com

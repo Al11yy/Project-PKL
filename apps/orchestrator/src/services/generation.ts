@@ -154,7 +154,7 @@ export async function generateProject(
   const envelope = parseEnvelope(
     completion.content,
     completion.finishReason,
-    promptHash(prompt),
+    await promptHash(prompt),
   )
   const usage: GenerationUsage = {
     inputTokens: completion.usage.inputTokens,
@@ -197,7 +197,7 @@ export async function reviseProject(
   const envelope = parseEnvelope(
     completion.content,
     completion.finishReason,
-    promptHash(instruction),
+    await promptHash(instruction),
   )
   const usage: GenerationUsage = {
     inputTokens: completion.usage.inputTokens,
@@ -209,7 +209,28 @@ export async function reviseProject(
     return { refusal: { reason: envelope.refusal.reason }, usage }
   }
 
-  const project = assembleProject(envelope, { id: projectId(), prompt: instruction })
+  /**
+   * The revision keeps the id of the project it revises.
+   *
+   * It used to mint a new one, which was harmless while everything lived in client memory —
+   * the id was a React key and nothing more. With persistence it is not harmless: the row
+   * being updated is identified by this id, so a fresh one on every revision would insert a
+   * new project each time and silently orphan the user's history. That is why the id is read
+   * back off the incoming project rather than generated.
+   *
+   * `currentProject` is `unknown` because the route validates it against `projectSchema`
+   * before calling, and a project without an id would already have been rejected there. The
+   * fallback to a fresh id keeps a refusal-shaped `undefined` from ever reaching SQL.
+   */
+  const existingId =
+    typeof currentProject === 'object' &&
+    currentProject !== null &&
+    'id' in currentProject &&
+    typeof (currentProject as { id: unknown }).id === 'string'
+      ? (currentProject as { id: string }).id
+      : projectId()
+
+  const project = assembleProject(envelope, { id: existingId, prompt: instruction })
 
   /**
    * Dropped screens are logged, not repaired. Splicing the old screens back in would make a

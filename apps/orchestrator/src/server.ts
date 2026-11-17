@@ -1,20 +1,30 @@
-import { ConfigError, loadLlmConfig, loadServerConfig } from './config'
-import { OpenAiCompatibleClient } from './llm/openai-compatible-client'
+import { serve } from '@hono/node-server'
 import { createApp } from './app'
+import { ConfigError, loadLlmConfig, loadServerConfig, type Env } from './config'
+import { OpenAiCompatibleClient } from './llm/openai-compatible-client'
 import { logger } from './logger'
 
 /**
- * Startup order matters: configuration is validated before the app is constructed, so a
- * missing key exits immediately naming the variable rather than becoming a 502 on the first
- * user request — a failure that would otherwise look like the provider's fault.
+ * Node dev entry point.
+ *
+ * This is a second way to run the *same* Hono app `worker.ts` serves on Cloudflare. Keeping
+ * both is deliberate: `wrangler dev` boots a real workerd isolate, which is the honest test,
+ * but it restarts slower and its D1 is a local copy — the Node path with `tsx watch` is the
+ * fast inner loop. The risk of two entry points is drift, and the guard against it is that
+ * neither one contains routing or business logic: both build the same `createApp`.
+ *
+ * `@hono/node-server` adapts a Node `IncomingMessage` into the `Request`/`Response` pair Hono
+ * expects, so the handlers here are byte-for-byte the ones the Worker runs.
  */
 function main(): void {
   let llmConfig
   let serverConfig
 
+  const env = process.env as Env
+
   try {
-    llmConfig = loadLlmConfig()
-    serverConfig = loadServerConfig()
+    llmConfig = loadLlmConfig(env)
+    serverConfig = loadServerConfig(env)
   } catch (error) {
     if (error instanceof ConfigError) {
       console.error(`[config] ${error.message}`)
@@ -23,9 +33,9 @@ function main(): void {
     throw error
   }
 
-  const app = createApp(new OpenAiCompatibleClient(llmConfig))
+  const app = createApp(new OpenAiCompatibleClient(llmConfig), llmConfig.timeoutMs)
 
-  const server = app.listen(serverConfig.port, () => {
+  const server = serve({ fetch: app.fetch, port: serverConfig.port }, () => {
     logger.info('server.listening', { port: serverConfig.port, model: llmConfig.model })
   })
 

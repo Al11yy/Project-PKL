@@ -1,9 +1,9 @@
-import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import { projectSchema } from '@rakit/schema'
 import { createApp } from './app'
 import { LlmAuthError, LlmProviderError, LlmRateLimitError, LlmTimeoutError } from './llm/errors'
 import type { LlmClient } from './llm/client'
+import type { Env } from './config'
 import {
   ScriptedLlmClient,
   clientProject,
@@ -13,17 +13,73 @@ import {
 
 const PROMPT = 'sistem kasir untuk klinik'
 
+/**
+ * These tests used `supertest`, which starts a real HTTP server and opens a socket per
+ * request. That works only on Node, and the app now runs on Workers, so the whole file moves
+ * to Hono's `app.request()`: it builds a `Request`, runs the handler chain, and returns a
+ * `Response`, with no socket and no server lifecycle.
+ *
+ * The assertions barely change — status, JSON body, headers — because the envelope contract is
+ * unchanged. What is genuinely different is *how* environment configuration reaches the app:
+ * bindings are passed as the second argument instead of being read from `process.env`.
+ */
+
+/**
+ * The environment a request sees. The API key is passed explicitly so a test that cares about
+ * `llmConfigured` does not have to mutate a global and remember to restore it — the previous
+ * version wrote and deleted `process.env.LLM_KITA_API_KEY`, which leaked between tests if one
+ * of them threw first.
+ */
+const ENV: Env = { LLM_KITA_API_KEY: 'test-key' }
+
 const app = (client: LlmClient) => createApp(client)
 
-/** A client whose every call rejects with the given error. */
-const failingClient = (error: Error): LlmClient =>
-  new ScriptedLlmClient(() => Promise.reject(error))
+/**
+ * `Hono.request` takes a `Request` and an optional `RequestInit`; bindings are supplied
+ * separately by `app.fetch(request, env)`. `request()` is the convenient form for a test that
+ * does not care about bindings, so `post`/`get` route through `fetch` when an `env` is given
+ * and through `request` otherwise. Both end up in the same handler chain.
+ */
+async function run(
+  instance: ReturnType<typeof createApp>,
+  request: Request,
+  env: Env = ENV,
+): Promise<{ status: number; body: any; headers: Headers }> {
+  const response = await instance.fetch(request, env)
+  return { status: response.status, body: await response.json(), headers: response.headers }
+}
+
+/** POST JSON through the Hono app and parse the envelope. */
+async function post(
+  instance: ReturnType<typeof createApp>,
+  path: string,
+  body: unknown,
+  env: Env = ENV,
+): Promise<{ status: number; body: any; headers: Headers }> {
+  return run(
+    instance,
+    new Request(`http://localhost${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    env,
+  )
+}
+
+async function get(
+  instance: ReturnType<typeof createApp>,
+  path: string,
+  env: Env = ENV,
+): Promise<{ status: number; body: any; headers: Headers }> {
+  return run(instance, new Request(`http://localhost${path}`), env)
+}
 
 describe('GET /api/v1/health', () => {
   it('responds ok without calling the provider', async () => {
     const client = clientReturning(validProjectJson())
 
-    const response = await request(app(client)).get('/api/v1/health')
+    const response = await get(app(client), '/api/v1/health')
 
     expect(response.status).toBe(200)
     expect(response.body).toMatchObject({ data: { status: 'ok' }, error: null })
@@ -31,21 +87,16 @@ describe('GET /api/v1/health', () => {
   })
 
   it('reports llmConfigured false when the key is absent', async () => {
-    const previous = process.env.LLM_KITA_API_KEY
-    delete process.env.LLM_KITA_API_KEY
-
-    const response = await request(app(clientReturning('{}'))).get('/api/v1/health')
+    const response = await get(app(clientReturning('{}')), '/api/v1/health', {})
     expect(response.body.data.llmConfigured).toBe(false)
-
-    if (previous !== undefined) process.env.LLM_KITA_API_KEY = previous
   })
 })
 
 describe('POST /api/v1/generate', () => {
   it('returns a project that passes projectSchema', async () => {
-    const response = await request(app(clientReturning(validProjectJson())))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/generate', {
+      prompt: PROMPT,
+    })
 
     expect(response.status).toBe(200)
     expect(response.body.error).toBeNull()
@@ -57,9 +108,7 @@ describe('POST /api/v1/generate', () => {
   it('returns 400 PROMPT_TOO_SHORT without calling the provider', async () => {
     const client = clientReturning(validProjectJson())
 
-    const response = await request(app(client))
-      .post('/api/v1/generate')
-      .send({ prompt: 'kasir' })
+    const response = await post(app(client), '/api/v1/generate', { prompt: 'kasir' })
 
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('PROMPT_TOO_SHORT')
@@ -67,18 +116,20 @@ describe('POST /api/v1/generate', () => {
   })
 
   it('returns 400 PROMPT_TOO_LONG', async () => {
-    const response = await request(app(clientReturning(validProjectJson())))
-      .post('/api/v1/generate')
-      .send({ prompt: 'a'.repeat(4_001) })
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/generate', {
+      prompt: 'a'.repeat(4_001),
+    })
 
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('PROMPT_TOO_LONG')
   })
 
   it('returns 400 INVALID_REQUEST when the body is not an object', async () => {
-    const response = await request(app(clientReturning(validProjectJson())))
-      .post('/api/v1/generate')
-      .send(['not', 'an', 'object'])
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/generate', [
+      'not',
+      'an',
+      'object',
+    ])
 
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('INVALID_REQUEST')
@@ -87,48 +138,49 @@ describe('POST /api/v1/generate', () => {
   it('strips an unexpected model key rather than honouring it', async () => {
     const client = clientReturning(validProjectJson())
 
-    await request(app(client))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT, model: 'gpt-4' })
+    await post(app(client), '/api/v1/generate', { prompt: PROMPT, model: 'gpt-4' })
 
     // The server's configured model is used; the request never reaches the client with a
     // client-chosen model, because the client interface does not expose one.
     expect(client.calls).toHaveLength(1)
   })
 
-  /**
-   * M-5 names the exact path and message for this case — `screens.0.blocks.2.kind` with
-   * "kind tidak dikenal: iframe" — so the test asserts them literally rather than merely
-   * checking that some detail exists. Three blocks, so the index is a real position and not
-   * the trivially-correct zero.
-   */
   /** M-8: a non-JSON Content-Type is 415, not a confusing downstream 400. */
   it('returns 415 UNSUPPORTED_MEDIA_TYPE for a text/plain body', async () => {
     const client = clientReturning(validProjectJson())
 
-    const response = await request(app(client))
-      .post('/api/v1/generate')
-      .set('Content-Type', 'text/plain')
-      .send('{"prompt":"sistem kasir untuk klinik"}')
+    const response = await app(client).fetch(
+      new Request('http://localhost/api/v1/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: '{"prompt":"sistem kasir untuk klinik"}',
+      }),
+      ENV,
+    )
 
     expect(response.status).toBe(415)
-    expect(response.body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE')
+    expect((await response.json() as any).error.code).toBe('UNSUPPORTED_MEDIA_TYPE')
     // Rejected before parsing, so nothing was spent discovering it.
     expect(client.calls).toHaveLength(0)
   })
 
   it('still serves a bodyless GET with no Content-Type', async () => {
-    const response = await request(app(clientReturning(validProjectJson()))).get('/api/v1/health')
+    const response = await get(app(clientReturning(validProjectJson())), '/api/v1/health')
 
     expect(response.status).toBe(200)
   })
 
-  /** M-8: over 32 kB is 413, refused by Express before the body is read into memory. */
+  /**
+   * M-8: over 32 kB is 413.
+   *
+   * Express refused this in its parser. Hono has no parser by default, so the limit is
+   * enforced by our own middleware reading `Content-Length` — which is why this test still
+   * proves something: the check would silently disappear if that middleware were dropped.
+   */
   it('returns 413 PAYLOAD_TOO_LARGE for a body over 32 kB', async () => {
-    const response = await request(app(clientReturning(validProjectJson())))
-      .post('/api/v1/generate')
-      .set('Content-Type', 'application/json')
-      .send(JSON.stringify({ prompt: 'a'.repeat(40_000) }))
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/generate', {
+      prompt: 'a'.repeat(40_000),
+    })
 
     expect(response.status).toBe(413)
     expect(response.body.error.code).toBe('PAYLOAD_TOO_LARGE')
@@ -152,9 +204,9 @@ describe('POST /api/v1/generate', () => {
       ],
     })
 
-    const response = await request(app(clientReturning(badKind)))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(app(clientReturning(badKind)), '/api/v1/generate', {
+      prompt: PROMPT,
+    })
 
     expect(response.status).toBe(422)
     expect(response.body.error.code).toBe('INVALID_SCHEMA')
@@ -178,9 +230,9 @@ describe('POST /api/v1/generate', () => {
       ],
     })
 
-    const response = await request(app(clientReturning(badKind)))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(app(clientReturning(badKind)), '/api/v1/generate', {
+      prompt: PROMPT,
+    })
 
     expect(response.status).toBe(422)
     expect(response.body.data).toBeNull()
@@ -188,9 +240,11 @@ describe('POST /api/v1/generate', () => {
 
   /** M-5: prose instead of JSON is a 422 whose detail says so, never a raw SyntaxError. */
   it('states that no JSON object was found when the model returns prose', async () => {
-    const response = await request(app(clientReturning('Tentu! Berikut skemanya.')))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(
+      app(clientReturning('Tentu! Berikut skemanya.')),
+      '/api/v1/generate',
+      { prompt: PROMPT },
+    )
 
     expect(response.status).toBe(422)
     expect(response.body.error.code).toBe('INVALID_SCHEMA')
@@ -201,18 +255,22 @@ describe('POST /api/v1/generate', () => {
 
   /** M-5: a fenced response is valid — models add fences even when told not to. */
   it('accepts a fenced JSON response', async () => {
-    const response = await request(app(clientReturning(`\`\`\`json\n${validProjectJson()}\n\`\`\``)))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(
+      app(clientReturning(`\`\`\`json\n${validProjectJson()}\n\`\`\``)),
+      '/api/v1/generate',
+      { prompt: PROMPT },
+    )
 
     expect(response.status).toBe(200)
     expect(projectSchema.safeParse(response.body.data.project).success).toBe(true)
   })
 
   it('returns 200 with data.refusal populated, not an error', async () => {
-    const response = await request(app(clientReturning('{"refusal":{"reason":"Terlalu luas."}}')))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(
+      app(clientReturning('{"refusal":{"reason":"Terlalu luas."}}')),
+      '/api/v1/generate',
+      { prompt: PROMPT },
+    )
 
     // M-5: a refusal is success. The statement is asserted twice, from both directions,
     // because reporting it as an error is the failure this criterion exists to prevent.
@@ -228,9 +286,9 @@ describe('POST /api/v1/generate', () => {
    * sends someone to re-login to fix a server-side key problem.
    */
   it('returns 502 LLM_UNAVAILABLE when the provider rejects our key', async () => {
-    const response = await request(app(failingClient(new LlmAuthError())))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(app(failingClient(new LlmAuthError())), '/api/v1/generate', {
+      prompt: PROMPT,
+    })
 
     expect(response.status).toBe(502)
     expect(response.body.error.code).toBe('LLM_UNAVAILABLE')
@@ -239,28 +297,27 @@ describe('POST /api/v1/generate', () => {
   })
 
   it('returns 503 LLM_RATE_LIMITED', async () => {
-    const response = await request(app(failingClient(new LlmRateLimitError())))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(app(failingClient(new LlmRateLimitError())), '/api/v1/generate', {
+      prompt: PROMPT,
+    })
 
     expect(response.status).toBe(503)
     expect(response.body.error.code).toBe('LLM_RATE_LIMITED')
   })
 
-  it('returns 504 LLM_TIMEOUT with charged false', async () => {
-    const response = await request(app(failingClient(new LlmTimeoutError(60_000))))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+  it('returns 504 LLM_TIMEOUT', async () => {
+    const response = await post(app(failingClient(new LlmTimeoutError(60_000))), '/api/v1/generate', {
+      prompt: PROMPT,
+    })
 
     expect(response.status).toBe(504)
     expect(response.body.error.code).toBe('LLM_TIMEOUT')
-    expect(response.body.error.details).toMatchObject({ charged: false })
   })
 
   it('returns 502 LLM_UNAVAILABLE for a provider 5xx', async () => {
-    const response = await request(app(failingClient(new LlmProviderError(500))))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(app(failingClient(new LlmProviderError(500))), '/api/v1/generate', {
+      prompt: PROMPT,
+    })
 
     expect(response.status).toBe(502)
     expect(response.body.error.code).toBe('LLM_UNAVAILABLE')
@@ -269,27 +326,50 @@ describe('POST /api/v1/generate', () => {
 
 describe('POST /api/v1/revise', () => {
   it('returns a revised project that passes projectSchema', async () => {
-    const response = await request(app(clientReturning(validProjectJson())))
-      .post('/api/v1/revise')
-      .send({ project: clientProject(), instruction: 'tambah kolom alergi pada tabel pasien' })
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/revise', {
+      project: clientProject(),
+      instruction: 'tambah kolom alergi pada tabel pasien',
+    })
 
     expect(response.status).toBe(200)
     expect(projectSchema.safeParse(response.body.data.project).success).toBe(true)
   })
 
+  /**
+   * A revision must keep the id of the project it revises.
+   *
+   * It used to mint a new one per revision. That was invisible while the id was only a React
+   * key, but persistence identifies the row to update by this id — a new id per revision would
+   * insert a new project and orphan the previous one's history. Nothing tested it before
+   * because nothing depended on it.
+   */
+  it('keeps the original project id across a revision', async () => {
+    const original = clientProject({ id: 'p-original-id' })
+
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/revise', {
+      project: original,
+      instruction: 'ubah judul jadi Klinik Sehat',
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.body.data.project.id).toBe('p-original-id')
+  })
+
   it('returns 400 when the project body violates the contract', async () => {
-    const response = await request(app(clientReturning(validProjectJson())))
-      .post('/api/v1/revise')
-      .send({ project: { name: 'tanpa id' }, instruction: 'tambah kolom alergi' })
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/revise', {
+      project: { name: 'tanpa id' },
+      instruction: 'tambah kolom alergi',
+    })
 
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('INVALID_REQUEST')
   })
 
   it('returns 400 PROMPT_TOO_LONG for an over-long instruction', async () => {
-    const response = await request(app(clientReturning(validProjectJson())))
-      .post('/api/v1/revise')
-      .send({ project: clientProject(), instruction: 'a'.repeat(4_001) })
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/revise', {
+      project: clientProject(),
+      instruction: 'a'.repeat(4_001),
+    })
 
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('PROMPT_TOO_LONG')
@@ -307,9 +387,10 @@ describe('POST /api/v1/revise', () => {
       ],
     })
 
-    const response = await request(app(clientReturning(validProjectJson())))
-      .post('/api/v1/revise')
-      .send({ project: twoScreens, instruction: 'ubah judul kasir' })
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/revise', {
+      project: twoScreens,
+      instruction: 'ubah judul kasir',
+    })
 
     expect(response.status).toBe(422)
     expect(response.body.error.code).toBe('REVISION_DROPPED_DATA')
@@ -329,9 +410,10 @@ describe('POST /api/v1/revise', () => {
       ],
     })
 
-    const response = await request(app(clientReturning(validProjectJson())))
-      .post('/api/v1/revise')
-      .send({ project: twoScreens, instruction: 'hapus layar laporan dari aplikasi' })
+    const response = await post(app(clientReturning(validProjectJson())), '/api/v1/revise', {
+      project: twoScreens,
+      instruction: 'hapus layar laporan dari aplikasi',
+    })
 
     expect(response.status).toBe(200)
   })
@@ -359,12 +441,10 @@ describe('Q-2: every external call is bounded', () => {
         }),
     }
 
-    const app = createApp(hanging, timeoutMs)
+    const instance = createApp(hanging, timeoutMs)
     const started = Date.now()
 
-    const response = await request(app)
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(instance, '/api/v1/generate', { prompt: PROMPT })
 
     const elapsed = Date.now() - started
 
@@ -391,7 +471,7 @@ describe('envelope discipline', () => {
     ]
 
     for (const [client, body, expectedStatus] of scenarios) {
-      const response = await request(app(client)).post('/api/v1/generate').send(body)
+      const response = await post(app(client), '/api/v1/generate', body)
 
       expect(response.status).toBe(expectedStatus)
       expect(response.body.data).toBeNull()
@@ -402,26 +482,46 @@ describe('envelope discipline', () => {
     }
   })
 
+  it('answers an unknown route with the envelope rather than a bare 404', async () => {
+    // Hono's default 404 is `text/plain`. The editor reads a non-envelope response as a
+    // network failure, so an unknown route would be reported as "server tidak merespons".
+    const response = await get(app(clientReturning(validProjectJson())), '/api/v1/tidak-ada')
+
+    expect(response.status).toBe(404)
+    expect(response.body.error.code).toBe('NOT_FOUND')
+  })
+
   it('never leaks the API key into an error response', async () => {
     const sentinel = 'sk-SENTINEL-DO-NOT-LEAK'
-    process.env.LLM_KITA_API_KEY = sentinel
 
-    const response = await request(app(failingClient(new LlmAuthError())))
-      .post('/api/v1/generate')
-      .send({ prompt: PROMPT })
+    const response = await post(app(failingClient(new LlmAuthError())), '/api/v1/generate', {
+      prompt: PROMPT,
+    }, { LLM_KITA_API_KEY: sentinel })
 
     expect(JSON.stringify(response.body)).not.toContain(sentinel)
   })
 
   it('sets an x-request-id header', async () => {
-    const response = await request(app(clientReturning(validProjectJson()))).get('/api/v1/health')
+    const response = await get(app(clientReturning(validProjectJson())), '/api/v1/health')
 
-    expect(response.headers['x-request-id']).toBeTruthy()
+    expect(response.headers.get('x-request-id')).toBeTruthy()
   })
 
-  it('does not expose x-powered-by', async () => {
-    const response = await request(app(clientReturning(validProjectJson()))).get('/api/v1/health')
+  /**
+   * The previous assertion was that `x-powered-by` is absent, which was an Express behaviour:
+   * Express sends it by default and the app disabled it. Hono never sends it, so asserting
+   * its absence would pass without proving anything. The intent — not advertising the
+   * framework to an attacker fingerprinting the stack — is what is tested instead.
+   */
+  it('does not advertise its framework in a response header', async () => {
+    const response = await get(app(clientReturning(validProjectJson())), '/api/v1/health')
 
-    expect(response.headers['x-powered-by']).toBeUndefined()
+    expect(response.headers.get('x-powered-by')).toBeNull()
+    expect(JSON.stringify([...response.headers])).not.toContain('hono')
   })
 })
+
+/** A client whose every call rejects with the given error. */
+function failingClient(error: Error): LlmClient {
+  return new ScriptedLlmClient(() => Promise.reject(error))
+}

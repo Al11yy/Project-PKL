@@ -23,6 +23,16 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
+# Wrangler's local secret file. It is NOT matched by the `.env.*` pattern above, and it holds
+# the LLM API key in plaintext — exactly the file that must never reach a commit.
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Wrangler's local state: the local D1 replica, caches, and build output. Machine-specific and
+# rebuildable from `migrations/`, so it is never committed.
+.wrangler/
+
 # MCP server config — embeds Atlassian credentials
 .mcp.json
 !.mcp.json.example
