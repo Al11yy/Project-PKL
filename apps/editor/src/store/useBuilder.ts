@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { COIN_COST, type LedgerEntry, type Project } from '../lib/types'
 import { SEED_LEDGER, SEED_PROJECTS, STARTER_BALANCE } from '../lib/seed'
 import { parseProjectsOrThrowAtStartup, ContractError } from '../lib/parse'
+import { ApiError, generateProject, reviseProject } from '../lib/api'
 
 export type View = 'builder' | 'schema' | 'ledger'
 
@@ -74,8 +75,8 @@ interface BuilderState {
     patch: { title?: string; body?: string; accent?: 'warn' | 'action' | 'ok' | undefined },
   ) => void
 
-  runGeneration: (prompt: string) => void
-  runRevision: (prompt: string) => void
+  runGeneration: (prompt: string) => Promise<void>
+  runRevision: (prompt: string) => Promise<void>
   runPublish: () => void
   topUp: (coins: number) => void
 
@@ -130,7 +131,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       ),
     })),
 
-  runGeneration: (prompt) => {
+  runGeneration: async (prompt) => {
     const cost = COIN_COST.generate
     const balance = get().balance()
     if (balance < cost) {
@@ -207,89 +208,104 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       hasGenerated: false,
     }))
 
-    const steps = [
+    /**
+     * The real call. The stage messages advance on a timer rather than from server progress,
+     * because the orchestrator answers in one response and reports nothing mid-flight — so
+     * these are a plausible narration of what the server is doing, not a live status. They
+     * stop the moment the answer lands, and the final stage is set from the result, never
+     * reached by the timer alone.
+     */
+    const stages = [
       'Membaca deskripsi…',
       'Menyusun PRD & skema…',
       'Memvalidasi skema…',
       'Menyusun layar…',
-      'Selesai',
     ]
-    steps.forEach((message, i) => {
+    const timers = stages.map((message, i) =>
       window.setTimeout(() => {
-        set((s) => ({
-          generation: { state: i === steps.length - 1 ? 'done' : 'running', stage: i, message },
-          hasGenerated: i === steps.length - 1 ? true : s.hasGenerated,
-        }))
-        if (i === steps.length - 1) {
-          /**
-           * The mutation is guarded, so a payload that fails the contract never reaches
-           * state. Today the only producer is this simulation, so the guard exists to be
-           * exercised rather than to catch a live failure: when the orchestrator lands,
-           * this is the boundary that keeps unvalidated model output out of the UI.
-           *
-           * A rejected payload is refunded in full, exactly like a too-short prompt.
-           */
-          try {
-            const nextPrompt = prompt
-            if (nextPrompt.length > 2000) {
-              // Mirrors the schema's cap so the contract is enforced before state changes.
-              throw new ContractError([
-                { path: 'prompt', message: 'prompt exceeds the 2000 character limit' },
-              ])
-            }
-            set((s) => ({
-              ledger: s.ledger.map((e) =>
-                e.refId === ref ? { ...e, detail: `${s.activeProject().tablesCount} tabel · ${s.activeProject().screensCount} layar` } : e,
-              ),
-              toasts: [
-                ...s.toasts,
-                {
-                  id: uid('t'),
-                  tone: 'ok',
-                  title: 'Aplikasi siap ditinjau',
-                  body: `${cost} koin terpakai. Sunting teks dan warna gratis lewat panel kanan.`,
-                },
-              ],
-              projects: s.projects.map((p) =>
-                p.id === s.activeId ? { ...p, prompt: nextPrompt, updatedAt: 'baru saja' } : p,
-              ),
-            }))
-          } catch (error) {
-            const detail =
-              error instanceof ContractError ? error.message : 'output tidak dapat dibaca'
-            set((s) => ({
-              ledger: [
-                {
-                  id: uid('l'),
-                  at: now(),
-                  label: 'Refund otomatis',
-                  detail: 'output ditolak kontrak blok',
-                  coins: cost,
-                  outcome: 'refunded',
-                  refId: ref,
-                },
-                ...s.ledger.map((e) =>
-                  e.refId === ref ? { ...e, detail: 'gagal — output tidak valid' } : e,
-                ),
-              ],
-              generation: { state: 'failed', stage: i, message: '' },
-              toasts: [
-                ...s.toasts,
-                {
-                  id: uid('t'),
-                  tone: 'danger',
-                  title: 'Output tidak valid — koin dikembalikan',
-                  body: `${detail}. ${cost} koin sudah kembali ke saldo Anda.`,
-                },
-              ],
-            }))
-          }
-        }
-      }, 700 * (i + 1))
-    })
+        // Guard: a late timer must not overwrite a result that already arrived.
+        if (get().generation.state !== 'running') return
+        set({ generation: { state: 'running', stage: i, message } })
+      }, 700 * (i + 1)),
+    )
+
+    try {
+      const { project } = await generateProject(prompt)
+      timers.forEach(window.clearTimeout)
+
+      /**
+       * The tree replaces the active project wholesale. Merging would leave blocks from the
+       * previous generation in place, and the point of a revision is that the server's answer
+       * is the whole truth about the project.
+       */
+      set((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === s.activeId ? { ...project, updatedAt: 'baru saja' } : p,
+        ),
+        generation: { state: 'done', stage: stages.length, message: '' },
+        hasGenerated: true,
+        selectedBlockId: null,
+        ledger: s.ledger.map((e) =>
+          e.refId === ref
+            ? { ...e, detail: `${project.tablesCount} tabel · ${project.screensCount} layar` }
+            : e,
+        ),
+        toasts: [
+          ...s.toasts,
+          {
+            id: uid('t'),
+            tone: 'ok',
+            title: 'Aplikasi siap ditinjau',
+            body: `${cost} koin terpakai. Sunting teks dan warna gratis lewat panel kanan.`,
+          },
+        ],
+      }))
+    } catch (error) {
+      timers.forEach(window.clearTimeout)
+
+      /**
+       * Every failure refunds in full, including a server-side one. The ledger records the
+       * spend and the refund as two entries rather than netting them, so the user can see
+       * that the charge happened and was returned — a single adjusted line would hide the
+       * failure that M-9's refund copy exists to make visible.
+       */
+      const detail =
+        error instanceof ApiError
+          ? error.message
+          : error instanceof ContractError
+            ? error.message
+            : 'output tidak dapat dibaca'
+
+      set((s) => ({
+        ledger: [
+          {
+            id: uid('l'),
+            at: now(),
+            label: 'Refund otomatis',
+            detail: 'generate gagal sebelum ada output',
+            coins: cost,
+            outcome: 'refunded',
+            refId: ref,
+          },
+          ...s.ledger.map((e) =>
+            e.refId === ref ? { ...e, detail: 'gagal — output tidak valid' } : e,
+          ),
+        ],
+        generation: { state: 'failed', stage: 0, message: '' },
+        toasts: [
+          ...s.toasts,
+          {
+            id: uid('t'),
+            tone: 'danger',
+            title: 'Generate gagal — koin dikembalikan',
+            body: `${detail} ${cost} koin sudah kembali ke saldo Anda.`,
+          },
+        ],
+      }))
+    }
   },
 
-  runRevision: (prompt) => {
+  runRevision: async (prompt) => {
     const cost = COIN_COST.revise
     const balance = get().balance()
     if (balance < cost) {
@@ -319,15 +335,71 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       }),
       revision: { state: 'running', message: 'Menerapkan revisi…' },
     }))
-    window.setTimeout(() => {
+    /**
+     * The instruction goes to the server with the tree the user is holding right now. The
+     * server refuses a revision that discards their ids (M-7), and that refusal is the case
+     * this branch exists for: the requested change did not happen, so the coins come back.
+     */
+    try {
+      const { project } = await reviseProject(get().activeProject(), prompt)
+
       set((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === s.activeId ? { ...project, updatedAt: 'baru saja' } : p,
+        ),
         revision: { state: 'done', message: '' },
+        ledger: s.ledger.map((e) =>
+          e.refId === ref ? { ...e, detail: prompt.slice(0, 48) || 'revisi' } : e,
+        ),
         toasts: [
           ...s.toasts,
           { id: uid('t'), tone: 'ok', title: 'Revisi diterapkan', body: `${cost} koin terpakai.` },
         ],
       }))
-    }, 1600)
+    } catch (error) {
+      /**
+       * `REVISION_DROPPED_DATA` is the one failure worth its own copy. The server is telling
+       * us the model threw away something the user still had — a problem with the model's
+       * answer, not with the instruction — and the useful advice is to retry or edit by hand,
+       * not to rephrase as if the prompt were at fault.
+       */
+      const dropped = error instanceof ApiError && error.code === 'REVISION_DROPPED_DATA'
+      const detail =
+        error instanceof ApiError
+          ? error.message
+          : error instanceof ContractError
+            ? error.message
+            : 'revisi tidak dapat diterapkan'
+
+      set((s) => ({
+        revision: { state: 'failed', message: '' },
+        ledger: [
+          {
+            id: uid('l'),
+            at: now(),
+            label: 'Refund otomatis',
+            detail: dropped ? 'revisi ditolak — data akan hilang' : 'revisi gagal',
+            coins: cost,
+            outcome: 'refunded',
+            refId: ref,
+          },
+          ...s.ledger.map((e) =>
+            e.refId === ref ? { ...e, detail: 'gagal — revisi ditolak' } : e,
+          ),
+        ],
+        toasts: [
+          ...s.toasts,
+          {
+            id: uid('t'),
+            tone: 'danger',
+            title: dropped ? 'Revisi ditolak — proyek tidak diubah' : 'Revisi gagal — koin dikembalikan',
+            body: dropped
+              ? `${detail} Coba lagi, atau sunting langsung lewat panel kanan.`
+              : `${detail} ${cost} koin sudah kembali ke saldo Anda.`,
+          },
+        ],
+      }))
+    }
   },
 
   runPublish: () => {

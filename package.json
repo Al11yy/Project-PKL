@@ -9,6 +9,11 @@
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "fake-llm": "node tools/fake-llm.mjs",
+    "dev:all": "node tools/dev-all.mjs",
+    "check:branches": "node tools/check-branches.mjs",
+    "smoke": "node tools/smoke.mjs",
+    "smoke:refusal": "node tools/smoke-refusal.mjs"
   }
 }

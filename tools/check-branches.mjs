@@ -1,0 +1,62 @@
+/**
+ * Drives every branch the browser can reach and prints one line per case.
+ *
+ * Restarts the fake provider before each case, because the fake carries state: a case that
+ * deletes a screen changes what the next case starts from, which silently turned a passing
+ * "unchanged revision" into a false failure when this was run by hand.
+ */
+import { spawn } from 'node:child_process'
+import { setTimeout as sleep } from 'node:timers/promises'
+
+const EDITOR = 'http://localhost:5180'
+
+const CASES = [
+  ['hilangkan layar', 422, 'REVISION_DROPPED_DATA'],
+  ['jangan hapus layar s-laporan', 422, 'REVISION_DROPPED_DATA'],
+  ['hapus kolom alergi dari tabel', 422, 'REVISION_DROPPED_DATA'],
+  ['ganti id blok semuanya', 422, 'REVISION_DROPPED_DATA'],
+  ['hapus layar s-laporan', 200, null],
+  ['ubah judul jadi Klinik Sehat', 200, null],
+]
+
+async function restartFake() {
+  const kill = spawn('sh', ['-c',
+    "netstat -ano | grep ':5197.*LISTENING' | head -1 | awk '{print $5}' | xargs -r -I{} taskkill //F //PID {} >/dev/null 2>&1"])
+  await new Promise((r) => kill.on('exit', r))
+  await sleep(700)
+  const child = spawn(process.execPath, ['tools/fake-llm.mjs'], { stdio: 'ignore', detached: true })
+  child.unref()
+  await sleep(1200)
+}
+
+async function generate() {
+  const res = await fetch(`${EDITOR}/api/v1/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: 'buat sistem kasir klinik dengan data pasien dan laporan' }),
+  })
+  const body = await res.json()
+  return body.data.project
+}
+
+let failures = 0
+for (const [instruction, wantStatus, wantCode] of CASES) {
+  await restartFake()
+  const project = await generate()
+  const res = await fetch(`${EDITOR}/api/v1/revise`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project, instruction }),
+  })
+  const body = await res.json()
+  const code = body.error?.code ?? null
+  const screens = body.data?.project?.screens?.length ?? null
+  const ok = res.status === wantStatus && code === wantCode
+  if (!ok) failures += 1
+  console.log(
+    `${ok ? 'ok  ' : 'FAIL'} ${instruction.padEnd(32)} ${res.status} ${String(code).padEnd(24)} layar=${screens}`,
+  )
+}
+
+console.log(failures === 0 ? '\nall branches behave as intended' : `\n${failures} case(s) wrong`)
+process.exit(failures === 0 ? 0 : 1)

@@ -41,7 +41,10 @@ export function PromptRow() {
               button. */}
           <ActionButton
             variant="primary"
-            onClick={() => runGeneration(text || project.prompt)}
+            // `void`: the action handles its own failures and reports them as toasts, so
+            // there is no rejection left to await. Marked explicitly rather than left as a
+            // floating promise, which would read as a forgotten await.
+            onClick={() => void runGeneration(text || project.prompt)}
             disabled={busy || !canAfford}
             cost={COIN_COST.generate}
             icon={<IconWand className="h-3.5 w-3.5" />}
@@ -55,7 +58,7 @@ export function PromptRow() {
           </ActionButton>
           <ActionButton
             variant="secondary"
-            onClick={() => runRevision(text)}
+            onClick={() => void runRevision(text)}
             disabled={busy || !text.trim() || !canRevise}
             cost={COIN_COST.revise}
             title={
