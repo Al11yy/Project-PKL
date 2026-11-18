@@ -1,11 +1,14 @@
 # Knowledge Base — Rakit.ai
 
-Ringkasan arsitektur aplikasi: pipeline PRD-to-UI, sistem desain Impeccable Style, dan
-sistem saldo koin. Ditulis dari kode yang ada di `apps/editor/`, bukan dari rencana.
+Ringkasan arsitektur yang **benar-benar terpasang** saat ini: pipeline PRD-to-UI, kontrak
+Zod bersama, orchestrator di Cloudflare Workers, dan persistensi D1. Ditulis dari kode di
+`apps/` dan `packages/`, bukan dari rencana.
 
-> **Status:** ini implementasi front-end yang berjalan penuh dengan data seed sintetis.
-> Belum ada backend (Express), panggilan LLM sungguhan, Cloudflare D1/Workers, maupun
-> Midtrans. Semua efek jaringan disimulasikan dengan `setTimeout` di store.
+> **Status (2026-11-18):** monorepo berjalan, pra-MVP. Editor punya 2 view, orchestrator
+> menyajikan CRUD proyek lewat `/api/v1/projects` dengan persistensi D1, dan output LLM
+> divalidasi Zod terhadap whitelist komponen. **Belum ada:** autentikasi, generator DDL,
+> dan provisioning per proyek. **Billing (koin/Midtrans) ditunda** ke fase berikutnya —
+> lihat `prd_ai_first_app_builder.md` untuk model yang dituju.
 
 ---
 
@@ -15,12 +18,12 @@ Rakit.ai adalah app builder yang mengubah satu kalimat deskripsi menjadi skema d
 plus aplikasi full-stack yang berjalan, lalu diterbitkan ke Cloudflare. Pengguna tidak
 menulis kode dan tidak mengonfigurasi infrastruktur.
 
-Tiga hal yang membedakannya dan harus tetap berjalan bersama:
+Tiga hal yang membedakannya, dan harus tetap berjalan bersama:
 
 1. **PRD-to-UI pipeline** — satu prompt menghasilkan skema + layar, bukan kanvas kosong.
-2. **Edit visual gratis** — jalur keluar yang tidak pernah menyentuh saldo.
-3. **Koin prabayar berbasis ledger** — setiap koin yang keluar punya baris yang bisa
-   direkonsiliasi pengguna sendiri.
+2. **Edit visual gratis** — jalur keluar yang tidak pernah menghitung biaya.
+3. **Generasi terbatas** — LLM tidak pernah mengeluarkan HTML/JS; hanya JSON yang lolos
+   validasi Zod dan dipetakan ke komponen whitelist.
 
 Sasaran pengguna tersebar lebar: pemilik UMKM yang belum pernah menyentuh database sampai
 freelancer yang menyentuhnya tiap minggu. Rentang literasi teknis itulah batasan utama
@@ -30,248 +33,188 @@ antarmuka.
 
 ```
 D:\PKL\Project
-├── apps/editor/          # Frontend editor (Vite + React + Tailwind + Zustand)
+├── apps/editor/              # Frontend editor (Vite + React + Tailwind + Zustand)
 │   ├── src/
-│   │   ├── App.tsx           # Komposisi shell + routing berbasis state
+│   │   ├── App.tsx               # Komposisi shell; navigasi lewat state
 │   │   ├── components/
-│   │   │   ├── shell/        # TopBar, Pipeline, PromptRow, Rail
-│   │   │   ├── preview/      # Preview — kanvas hasil generate
-│   │   │   ├── inspector/    # Inspector — editor visual gratis
-│   │   │   ├── views/        # SchemaView, LedgerView
-│   │   │   └── ui/           # Button, Icons, Toasts
+│   │   │   ├── shell/            # TopBar, Pipeline, PromptRow, Rail
+│   │   │   ├── preview/          # Preview — kanvas hasil generate
+│   │   │   ├── inspector/        # Inspector — editor visual gratis
+│   │   │   ├── views/            # SchemaView
+│   │   │   └── ui/               # Button, Icons, Toasts
 │   │   ├── lib/
-│   │   │   ├── types.ts      # Kontrak domain + COIN_COST
-│   │   │   └── seed.ts       # Data demo sintetis
-│   │   ├── store/useBuilder.ts  # Seluruh state + aksi
-│   │   └── index.css         # Token turunan Tailwind + base layer
-│   ├── .shots/           # Harness verifikasi Playwright + screenshot
-│   └── tailwind.config.js    # Token desain
-├── .claude/              # Slash commands, skills, agents
-├── .amanah/              # Atlas (peta arsitektur) + blueprint
-├── CLAUDE.md             # Instruksi agen + aturan non-negosiabel
-├── PRODUCT.md            # Definisi produk
-└── prd_ai_first_app_builder.md   # Sumber kebenaran kebutuhan
+│   │   │   ├── api.ts            # Klien HTTP ke orchestrator
+│   │   │   ├── contract.ts       # Shim re-export @rakit/schema
+│   │   │   ├── parse.ts          # Shim re-export @rakit/schema
+│   │   │   ├── seed.ts           # Data demo sintetis
+│   │   │   └── types.ts          # Tipe domain editor
+│   │   ├── store/useBuilder.ts   # Seluruh state + aksi
+│   │   └── index.css             # Token turunan Tailwind + base layer
+│   ├── .shots/               # Harness verifikasi Playwright + screenshot
+│   └── tailwind.config.js        # Token desain
+├── apps/orchestrator/        # Hono — LLM-Kita, rute, layanan, D1
+│   └── src/
+│       ├── app.ts                # Satu app, dua entry point
+│       ├── worker.ts             # Entry Cloudflare Worker (target deploy)
+│       ├── server.ts             # Entry Node + tsx watch (inner loop)
+│       ├── node-handler.ts       # Membungkus app dengan env untuk Node
+│       ├── auth.ts               # Gerbang token bersama
+│       ├── config.ts             # Semua env dibaca di satu tempat
+│       ├── errors.ts             # Bentuk error API
+│       ├── llm/                  # Klien OpenAI-compatible + ekstraksi JSON
+│       ├── prompt/               # Pembangun system prompt
+│       ├── repositories/         # projects.ts — CRUD + revisi D1
+│       ├── routes/               # Permukaan HTTP
+│       └── services/             # generation.ts — orkestrasi generate/revise
+├── packages/schema/          # @rakit/schema — kontrak Zod bersama
+│   └── src/                      # contract, parse, assemble, index
+├── .claude/                  # Slash commands, skills, agents
+├── .amanah/                  # Atlas (peta arsitektur) + blueprint
+├── CLAUDE.md                 # Instruksi agen + aturan non-negosiabel
+├── PRODUCT.md                # Definisi produk
+└── prd_ai_first_app_builder.md   # Sumber kebenaran kebutuhan (termasuk billing)
 ```
 
 **Tidak ada router.** Navigasi sepenuhnya lewat field `view` di store
-(`'builder' | 'schema' | 'ledger'`). Konsekuensi praktis: tidak ada URL langsung ke satu
-view, dan state tidak bertahan setelah reload.
+(`'builder' | 'schema'`). Konsekuensi praktis: tidak ada URL langsung ke satu view, dan
+state tidak bertahan setelah reload.
 
 ---
 
-## 2. Pipeline PRD-to-UI
+## 2. Dua Entry Point, Satu App
 
-### Tahapan
+Orchestrator punya dua entry point ke `createApp()` yang sama:
 
-Didefinisikan di `src/lib/types.ts` sebagai `PIPELINE`, dirender oleh `Pipeline.tsx`:
+| Entry | Runtime | Port | Kegunaan |
+|-------|---------|------|----------|
+| `src/worker.ts` | Cloudflare Workers | — | Target deploy production |
+| `src/server.ts` | Node + `tsx watch` | 5181 | Inner loop cepat |
 
-| # | Stage | Arti | Biaya |
-|---|-------|------|-------|
-| 1 | `prompt` | Deskripsi diterima | — |
-| 2 | `schema` | Tabel & kolom diturunkan | 20 (generate) |
-| 3 | `ui` | Layar & blok disusun | termasuk generate |
-| 4 | `edit` | Sunting teks/warna manual | **0** |
-| 5 | `publish` | Deploy ke Cloudflare | 50 |
+Keduanya **tidak** memuat routing atau logika bisnis. Konfigurasi masuk lewat objek `Env`
+eksplisit, bukan `process.env` — inilah yang membuat kode sama bisa jalan di dua runtime
+tanpa polyfill `nodejs_compat`.
 
-### Alur `runGeneration` (`store/useBuilder.ts:118`)
-
-```
-prompt masuk
-  ├─ saldo < 20?  → toast "Koin tidak cukup", BERHENTI (tidak ada baris ledger)
-  ├─ prompt < 12 karakter?
-  │     → tulis debit -20 (outcome: failed)
-  │     → tulis refund +20 (outcome: refunded)   ← pasangan, refId sama
-  │     → toast gagal, BERHENTI
-  └─ jalur normal
-        → tulis debit -20 SEBELUM kerja dimulai (outcome: spent)
-        → 5 langkah progres via setTimeout (700 ms × i)
-        → langkah terakhir: detail baris diisi jumlah tabel/layar, toast sukses
-```
-
-Dua hal yang disengaja di sini:
-
-**Biaya ditulis sebelum kerja dimulai.** Kalau proses gagal di tengah, sudah ada baris
-debit yang bisa direfund. Tidak ada jendela waktu di mana kerja berjalan tanpa catatan.
-
-**Kegagalan yang bisa dicapai pengguna.** Prompt di bawah 12 karakter adalah kegagalan
-nyata yang ditolak *setelah* debit ditulis, lalu direfund penuh. Ini membuat jalur refund
-sesuatu yang benar-benar bisa dipicu dan diverifikasi, bukan klaim di teks pemasaran.
-
-### Jalur revisi & terbit
-
-- `runRevision` (`:231`) — biaya 5 koin, satu langkah 1600 ms. Catatan: revisi saat ini
-  **tidak** punya jalur gagal/refund seperti generate.
-- `runPublish` (`:272`) — biaya 50 koin, tiga langkah (database → Worker → Pages), lalu
-  status proyek jadi `'live'` dan detail baris diisi `'Pages · D1 · Worker'`.
-
-### Bentuk data hasil generate
-
-`Project` → `Screen[]` → `UIBlock[]`. Blok adalah node JSON, **bukan markup**:
-
-```ts
-type BlockKind = 'navbar' | 'stat' | 'table' | 'form' | 'card' | 'chart'
-interface UIBlock {
-  id: string
-  kind: BlockKind
-  title?: string   // teks yang boleh diedit inspector
-  body?: string    // baris copy, urut baca
-  accent?: string  // aksen dari palet
-}
-```
-
-`Preview.tsx` memetakan `kind` ke komponen lewat `ScreenView`, dengan `StatBlock`,
-`TableBlock`, `NavBlock`, plus `GeneratingState` dan `FailedState`.
-
-**Aturan non-negosiabel (dari `CLAUDE.md`):** LLM tidak pernah mengeluarkan HTML atau JS.
-Ia mengembalikan JSON yang divalidasi Zod lalu dipetakan **hanya** ke komponen
-whitelist. Komponen tak dikenal ditolak. Saat ini validasi Zod belum ada karena LLM belum
-disambungkan — `SEED_PROJECTS` mengisi peran itu.
+> **Jebakan yang pernah menggigit:** `server.ts` dulu memanggil `serve({ fetch: app.fetch })`.
+> `@hono/node-server` tidak memasok `env`, sehingga `c.env` selalu `undefined` dan **gerbang
+> token tidak pernah berjalan** di jalur Node — sementara seluruh test tetap hijau karena test
+> memberi `env` sendiri. Sekarang `createNodeHandler(env)` menutup `env` ke dalam handler, dan
+> `node-handler.test.ts` menjaganya.
 
 ---
 
-## 3. Komponen Impeccable Style
+## 3. Permukaan HTTP
 
-Bukan pustaka eksternal. "Impeccable Style" di repo ini adalah sistem desain internal
-yang ditegakkan lewat token Tailwind dan aturan di `.claude/skills/impeccable/`.
+| Rute | Keterangan |
+|------|------------|
+| `GET /api/v1/health` | Terbuka tanpa token. Melaporkan `llmConfigured` saja. |
+| `GET /api/v1/projects` | Daftar proyek |
+| `POST /api/v1/projects` | Buat proyek |
+| `GET /api/v1/projects/:id` | Baca satu proyek |
+| `PUT /api/v1/projects/:id` | Perbarui proyek |
+| `DELETE /api/v1/projects/:id` | Hapus proyek |
+| `POST /api/v1/generate` | Prompt → proyek baru |
+| `POST /api/v1/revise` | Instruksi → revisi proyek (id dipertahankan) |
 
-### Token desain (`tailwind.config.js`)
+### Kendali akses
 
-**Warna** — semua semantik, tidak ada nama warna mentah di komponen:
+Dua lapis, **tidak satu pun autentikasi sungguhan**:
 
-| Grup | Token | Nilai | Dipakai untuk |
-|------|-------|-------|---------------|
-| Teks | `ink` | `#111827` | Judul, angka utama |
-| | `ink-body` | `#374151` | Paragraf |
-| | `ink-muted` | `#4B5563` | Sekunder |
-| | `ink-meta` | `#6B7280` | Label, timestamp |
-| Latar | `ground` | `#FFFFFF` | Kanvas |
-| | `ground-panel` | `#FAFAFA` | Rail, inspector |
-| | `ground-sunken` | `#F9FAFB` | Header tabel |
-| Garis | `rule` / `rule-soft` / `rule-strong` | `#E5E7EB` / `#F3F4F6` / `#D1D5DB` | Hairline |
-| Aksi | `action` / `action-hover` / `action-soft` | `#2563EB` / `#1D4ED8` / `#EFF6FF` | Satu warna aksi saja |
-| Status | `ok` / `warn` / `danger` | `#047857` / `#B45309` / `#B91C1C` | Outcome ledger, toast |
+- **`FEATURE_GENERATE_ENABLED`** — `/generate` dan `/revise` membalas **503
+  `FEATURE_DISABLED`** kecuali nilainya persis `"true"`. **Mati secara default**,
+  termasuk bila tidak di-set. Ini lapis yang benar-benar bekerja: hidup di environment
+  Worker dan tidak bisa dibaca klien.
+- **`RAKIT_SHARED_TOKEN`** — semua rute kecuali `/health` dan preflight CORS memerlukan
+  `X-Rakit-Token` yang cocok. Ini **pengekangan, bukan autentikasi**: editor adalah aplikasi
+  browser, jadi Vite menanam tokennya ke bundle dan terbaca di DevTools. Ia menghalangi
+  crawler dan scanner, tidak lebih.
 
-**Skala teks** — 5 tingkat, semuanya disetel untuk UI padat:
-
-| Token | Ukuran / line-height | Dipakai |
-|-------|---------------------|---------|
-| `micro` | 11.5 / 16 | Label uppercase, badge |
-| `meta` | 12.5 / 18 | Keterangan, sel tabel |
-| `body` | 13.5 / 20 | Teks utama, judul panel |
-| `title` | 21 / 28, `-0.02em` | Judul halaman |
-| `figure` | 22 / 26, `-0.02em` | Angka besar |
-
-**Font** — `Inter` untuk UI, `JetBrains Mono` untuk semua angka dan ID. Kelas `.tnum`
-(`font-variant-numeric: tabular-nums`) wajib pada kolom angka agar tidak bergoyang saat
-nilai berubah.
-
-### Konvensi yang ditegakkan
-
-- **Satu warna aksi.** Hanya `action` (biru) yang menandakan tindakan. Status memakai
-  keluarga `ok`/`warn`/`danger`, tidak pernah biru.
-- **Tekan, bukan bersinar.** Kelas `.press` (`index.css:73`) memberi translasi 0,5px saat
-  `:active` dengan easing 90 ms. Tidak ada glow atau scale.
-- **Garis rambut, bukan bayangan.** Pemisahan memakai `border-rule`, bukan `box-shadow`.
-- **Angka monospace + tabular.** Saldo, koin, dan waktu selalu `font-mono tnum`.
-- **Permukaan browser ikut didesain.** `::selection`, `:focus-visible` (cincin 2px
-  `#2563EB`, offset 2px), caret, dan scrollbar ditata di `index.css`.
-- **Editor visual menyebut dirinya gratis.** `Inspector.tsx` menulis "gratis" di panelnya
-  sendiri karena itu inti janjinya, bukan detail tersembunyi.
-
-### Komponen UI
-
-`ui/Button.tsx` mengekspor `ActionButton` (variant `primary`/`secondary`, size
-`sm`/`md`, slot `icon`) dan `IconButton`. `ui/Icons.tsx` berisi ikon SVG inline tanpa
-dependensi ikon eksternal. `ui/Toasts.tsx` merender `tone: 'ok' | 'warn' | 'danger'`.
+`CORS_ALLOWED_ORIGINS` adalah aturan browser, bukan kontrol akses — `curl` mengabaikannya.
+Jangan pernah menggantinya dengan `*`.
 
 ---
 
-## 4. Sistem Saldo Koin
+## 4. Persistensi
 
-### Prinsip
+Satu database D1 (`rakit-db`) menyimpan **metadata platform saja**:
 
-Saldo **diturunkan** dari ledger, tidak pernah disimpan sebagai angka yang bisa berubah
-sendiri:
+- `projects` — `id`, `owner_id` (placeholder), `name`, `slug`, `prompt`, `status`,
+  `document` (JSON), `revision`, `created_at`, `updated_at`
+- `project_revisions` — riwayat; setiap baris mencatat keadaan *setelah* satu revisi
 
-```ts
-// useBuilder.ts:20
-const STARTER_BALANCE_BASE = STARTER_BALANCE - SEED_LEDGER.reduce((s, e) => s + e.coins, 0)
-// useBuilder.ts:35
-const balanceOf = (ledger) => ledger.reduce((sum, e) => sum + e.coins, STARTER_BALANCE_BASE)
-```
+Aturan yang tidak boleh dilanggar:
 
-`STARTER_BALANCE_BASE` adalah saldo pembuka sebelum baris pertama, dihitung agar ledger
-contoh rekonsiliasi tepat ke **128**. Untuk menambah riwayat contoh, basis ini menyesuaikan
-sendiri — tidak ada angka yang perlu diedit tangan.
+- **Revisi mempertahankan `id` proyek.** `reviseProject` tidak pernah membuat id baru;
+  id menandai baris yang diperbarui dan riwayat miliknya.
+- **Satu database D1 per proyek pengguna.** Tidak ada tabel lintas-tenant. Data aplikasi
+  pengguna tidak pernah masuk `rakit-db`.
 
-Ini menerjemahkan aturan produk: *ledger-based, jangan pernah kolom saldo yang bisa
-melenceng*. Di backend nanti bentuknya transaksi atomik dengan update kondisional; di
-front-end bentuknya `reduce` atas sumber kebenaran tunggal.
-
-### Harga (`COIN_COST`, `lib/types.ts:1`)
-
-```ts
-generate: 20, revise: 5, manualEdit: 0, publish: 50
-```
-
-Harga dirujuk lewat konstanta ini di seluruh kode dan di `seed.ts` — tidak ada angka
-hardcoded yang bisa menyimpang dari daftar harga.
-
-### Bentuk baris ledger
-
-```ts
-interface LedgerEntry {
-  id: string
-  at: string          // "HH:MM" lokal id-ID
-  label: string       // "Generate PRD & UI"
-  detail: string      // "12 tabel · 8 layar" | "gagal — deskripsi terlalu pendek"
-  coins: number       // negatif = keluar, positif = masuk/kembali
-  outcome: 'spent' | 'free' | 'refunded' | 'failed'
-  refId: string       // mengikat debit ke refund-nya (gen_0001, dep_51ee07)
-}
-```
-
-`refId` adalah kunci rekonsiliasi. Debit dan refund untuk satu percobaan berbagi `refId`
-yang sama, sehingga barisnya bisa dipasangkan. `LedgerView.tsx` memetakan `outcome` ke
-warna dan label: `spent` → "terpakai", `free` → "gratis", `refunded` → "dikembalikan",
-`failed` → "gagal".
-
-### Invarian yang harus dijaga
-
-1. Setiap `refunded` punya `spent`/`failed` berpasangan dengan `refId` sama, dan nominalnya
-   sama besar.
-2. `manualEdit` selalu 0 dan tidak pernah menulis baris ledger (lihat `updateBlock`,
-   `useBuilder.ts:102` — hanya menyentuh `projects`, tidak menyentuh `ledger`).
-3. Saldo tidak pernah negatif: setiap aksi memeriksa `balance() < cost` lebih dulu dan
-   berhenti dengan toast sebelum menulis apa pun.
-4. Kegagalan setelah debit meninggalkan jejak — tidak ada kegagalan senyap.
-
-### Pembayaran (belum diimplementasi)
-
-`topUp()` saat ini langsung menambah baris ledger dengan detail "QRIS terverifikasi".
-Di produksi, koin hanya boleh masuk setelah **webhook Midtrans terverifikasi**, bukan
-setelah halaman redirect. Ini tertulis di UI (`LedgerView.tsx`) dan harus dipertahankan.
+Migrasi ada di `apps/orchestrator/migrations/`. Terapkan dengan `npm run db:migrate:local`
+atau `npm run db:migrate:remote` dari `apps/orchestrator/`.
 
 ---
 
-## 5. Verifikasi
+## 5. Kontrak Bersama (`@rakit/schema`)
 
-Harness Playwright di `apps/editor/.shots/`:
+`packages/schema` adalah satu-satunya rumah whitelist komponen. Ia diimpor sebagai sumber
+(`"main": "./src/index.ts"`), bukan dibangun ke `dist/`, jadi tidak ada langkah build antar
+paket.
+
+`apps/editor/src/lib/contract.ts` dan `parse.ts` adalah **shim re-export**, bukan salinan.
+Duplikasi akan memberi whitelist dua rumah dan membuatnya melenceng — kegagalan yang justru
+ingin dicegah `WHITELISTED_KINDS`. Hapus shim setelah seluruh import editor menunjuk
+`@rakit/schema` langsung.
+
+Aturan #1 ditegakkan di sini: `kind` adalah `refine` atas whitelist (bukan `z.enum`, agar
+pesan galat bisa menyebut nilai yang ditolak), dan `parse.ts` menyebut nilai yang diterima
+dari payload mentah.
+
+---
+
+## 6. Alur yang Berjalan
+
+**Generate** (`runGeneration` di `store/useBuilder.ts` → `POST /api/v1/generate`):
+
+1. Prompt dikirim ke orchestrator.
+2. `services/generation.ts` memanggil LLM-Kita dengan timeout eksplisit.
+3. Balasan diekstrak JSON-nya, lalu divalidasi Zod terhadap kontrak.
+4. Proyek baru ditulis ke D1 dan dikembalikan; editor menampilkannya.
+
+Pesan tahap di UI dimajukan oleh timer, bukan progres server. Ini **diketahui dan dicatat**
+sebagai utang teknis di `TODO.md` — bukan kebetulan yang perlu ditemukan ulang.
+
+**Revisi** (`runRevision` → `POST /api/v1/revise`): instruksi diterapkan ke dokumen yang ada,
+`id` dipertahankan, `revision` dinaikkan, dan baris riwayat ditulis.
+
+**Publish** (`runPublish`): masih **simulasi `setTimeout`**. Belum ada generator DDL maupun
+provinsi Cloudflare.
+
+---
+
+## 7. Yang Sengaja Tidak Ada
+
+Jangan bangun ulang tanpa keputusan eksplisit:
+
+- **Sistem koin, ledger, saldo, Midtrans.** Dihapus sebagai kode mati. Model bisnisnya
+  **ditunda**, bukan dibatalkan — masih ada di PRD. Untuk MVP, kuota dan biaya sepenuhnya
+  ada di akun LLM-Kita. Jangan tampilkan saldo, harga, atau tombol "top up" di antarmuka,
+  karena tidak ada yang menagih.
+- **Express.js / `apps/api/`.** Backend adalah Hono di Workers. Tidak akan ada `apps/api/`.
+- **View `ledger`.** Hanya `builder` dan `schema` yang ada.
+
+---
+
+## 8. Menjalankan
 
 ```bash
-cd apps/editor
-npm run dev                 # port 5180, strictPort
-node .shots/verify.mjs      # overflow + error konsol di 1440/1280/1024px
-node .shots/flow.mjs        # jalur inspector gratis, gagal+refund, publish
+npm run dev:all        # editor + orchestrator bersama
+npm test               # vitest di semua workspace
+npm run typecheck      # tsc --noEmit di semua workspace
+npm run fake-llm       # provider LLM palsu, tanpa API key
+npm run smoke          # smoke end-to-end terhadap provider palsu
 ```
 
-`flow.mjs` mencetak `BALANCE_AFTER_REFUND` — nilai yang harus tetap **128**. Screenshot
-hasilnya (`*.png`) di-ignore git; skripnya (`*.mjs`) tetap dilacak.
+Dari `apps/orchestrator/`: `npm run dev` (:5181), `npm run dev:worker` (:8787),
+`npm run deploy`.
 
-### Batasan yang perlu diketahui
-
-- **Tidak ada test unit.** Tidak ada Vitest/Jest. Verifikasi masih end-to-end lewat
-  Playwright dan pembacaan screenshot.
-- **Semua state hilang saat reload.** Tidak ada persistensi, tidak ada backend.
-- **Tidak ada autentikasi** — ini prototipe antarmuka, bukan produk yang bisa diekspos.
-- **`dist/` di-ignore git** dan dibangun ulang lewat `npm run build`.
+Editor juga bisa berdiri sendiri: `cd apps/editor && npm run dev` (:5180, `strictPort` —
+instance kedua gagal, bukan memilih port lain).

@@ -35,11 +35,17 @@ an operator can tell "the Worker is down" from "my token is wrong" without holdi
 Do not describe the shared token as auth in docs or UI, and do not let it survive the arrival
 of real auth. It is a stopgap against a public URL with a working API key on it.
 
-**Billing was removed from the product.** There is no coin ledger, no balance, and no
-Midtrans. Quota and payment are handled entirely by the LLM-Kita account: the orchestrator
-forwards requests with an API key, and nothing in this repository meters or charges for them.
-The coin UI, `COIN_COST`, `topUp()` and `balance()` have been deleted — do not reintroduce
-them without an explicit decision.
+**Billing is deferred, not cancelled.** The intended model — prepaid IDR coins funded through
+Midtrans — is still the product vision and still lives in `prd_ai_first_app_builder.md`. It is
+**not implemented in the MVP**, because the current goal is a working core first. Quota and
+payment are handled entirely by the LLM-Kita account: the orchestrator forwards requests with
+an API key, and nothing in this repository meters or charges for them.
+
+The coin UI, `COIN_COST`, `topUp()` and `balance()` were deleted as dead code — do not
+reintroduce them while building the MVP. When billing is picked up in a later phase, it must
+arrive with: a ledger that is append-only, deduction before the LLM call, a `refId`-keyed
+idempotent refund on failure, and no mutable `balance` column. Until then, no interface may
+show a balance, a coin count, a price, or a "top up" affordance, because nothing bills.
 
 **The LLM-Kita API is not the LLM-Kita website.** The API is at
 `https://api.llm-kita.com/api/v1` (OpenAI-compatible, model `auto`). The marketing site at
@@ -75,7 +81,7 @@ code run on both runtimes without a `nodejs_compat` polyfill.
 | D1 project repository (CRUD + revisions) | `apps/orchestrator/src/repositories/projects.ts` |
 | Editor persistence (load on mount, save on edit) | `apps/editor/src/store/useBuilder.ts` |
 | CORS allowlist, enforced at the worker entry | `apps/orchestrator/src/cors.test.ts`, `src/worker.test.ts` |
-| Unit tests (188 across 10 files) | `**/*.test.ts` |
+| Unit tests (237 across 14 files) | `**/*.test.ts` |
 
 | What is NOT built | Consequence |
 |-------------------|-------------|

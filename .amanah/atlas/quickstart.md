@@ -1,76 +1,78 @@
 # AI-First App Builder for Indonesia — Quick Start Recipes
 
-> **Regenerated from code on 2026-07-15.** Recipes marked **✔ works today** are verified
-> against the current editor. The rest target code that does not exist yet.
+> **Regenerated from code on 2026-11-18.** Recipes marked **✔ works today** are verified
+> against the current code. Recipes for billing and Midtrans have been removed — that phase
+> is deferred, and the design notes live in `prd_ai_first_app_builder.md` and the last
+> section of `conventions.md`.
 
 ## Running What Exists
 
 ```bash
-cd apps/editor
-npm run dev            # Vite on port 5180, strictPort
+npm run dev:all        # editor (:5180) + orchestrator (:5181) + fake LLM if no API key
 ```
 
-Then open **http://localhost:5180**. Navigate via the left rail: Editor / Skema /
-Riwayat koin. There is no router — the URL never changes.
+Or separately:
 
-> If it says "Port 5180 is already in use", an instance is already running. Either use it
-> or stop it; `strictPort: true` means Vite will not pick another port.
+```bash
+cd apps/editor && npm run dev          # Vite on 5180, strictPort
+cd apps/orchestrator && npm run dev    # Node + tsx watch on 5181
+cd apps/orchestrator && npm run dev:worker   # wrangler dev on 8787 — real workerd isolate
+```
+
+Open **http://localhost:5180**. Navigate via the left rail: **Editor** / **Skema**. There is
+no router — the URL never changes.
+
+> If it says "Port 5180 is already in use", an instance is already running. `strictPort: true`
+> means Vite will not pick another port.
 
 ### Verify before claiming anything works ✔
 
 ```bash
-cd apps/editor
-npx tsc --noEmit          # must print nothing
-npm run build             # must succeed
-node .shots/verify.mjs    # expects: ERRORS: none, no overflow lines
-node .shots/flow.mjs      # expects: BALANCE_AFTER_REFUND: 128
+npm test               # vitest across all workspaces
+npm run typecheck      # tsc --noEmit across all workspaces
 ```
 
-`verify.mjs` reports an overflow for `LABEL.sr-only` lines, which is the visually-hidden
-label technique and is expected, not a defect.
+From `apps/editor/`:
+
+```bash
+node .shots/verify.mjs # overflow + console errors at 1440/1280/1024
+node .shots/flow.mjs   # free-inspector and publish paths
+```
+
+`verify.mjs` reports an overflow for `LABEL.sr-only` lines — that is the visually-hidden label
+technique, expected rather than a defect.
+
+**A green suite is not proof for env-dependent code.** Tests construct their own `Env`, so a
+missing `env` on the real entry path passes every test and still fails in production. That is
+exactly how the `server.ts` token gap survived. When you touch an entry point, exercise it
+through `worker.fetch` or `createNodeHandler`, or curl a running server.
 
 ## Common Tasks — Copy-Paste Ready
 
-### Change coin prices ✔ works today
-
-1. Edit `COIN_COST` in `apps/editor/src/lib/types.ts` — the single source of truth.
-2. Never hardcode a price at a call site; `useBuilder.ts` reads `COIN_COST.generate` etc.
-3. If you add a priced action, add a matching `outcome` row in `seed.ts` so the demo
-   ledger still reconciles to 128 — `STARTER_BALANCE_BASE` adjusts automatically, but the
-   `flow.mjs` assertion will catch it if you break the pairing.
-4. Run `node .shots/flow.mjs`; confirm `BALANCE_AFTER_REFUND: 128`.
-
 ### Add a new block kind (and actually render it) ✔ pattern works today
 
-The bug to avoid: `BlockKind` in `types.ts` already declares `form`, `card`, and `chart`,
-but **no renderer exists** for them — they are dead type surface. Follow all four steps:
+The whitelist and the renderer must move together, or the schema will accept a kind that
+renders nothing — indistinguishable from a bug.
 
-1. Add the kind to `BlockKind` in `apps/editor/src/lib/types.ts`.
-2. Write the renderer in `apps/editor/src/components/preview/Preview.tsx` following
-   `TableBlock`, which is the most complete example:
-   ```tsx
-   function CardBlock({ block, inspectOpen, selected, onSelect }) {
-     return (
-       <div onClick={() => inspectOpen && onSelect(block.id)} className={ring(inspectOpen, selected)}>
-         <div className="rounded-lg border border-rule bg-ground p-4">
-           <h3 className="text-body font-semibold">{block.title}</h3>
-           <p className="mt-1 text-meta text-ink-meta">{block.body}</p>
-         </div>
-       </div>
-     )
-   }
-   ```
-3. Branch on it inside `ScreenView`. Note `ScreenView` partitions blocks into `nav`,
-   `stats`, and `rest` — a new kind must land in `rest` or be given its own partition.
-4. Add seed data using the new kind in `apps/editor/src/lib/seed.ts`, at least two
-   instances. An unrendered kind is indistinguishable from a bug; seed data is what proves
-   it works.
-5. Re-run `verify.mjs` at all three widths.
+1. Add the kind to `WHITELISTED_KINDS` in `packages/schema/src/contract.ts`. This is the
+   single source of truth: the Zod schema, the system prompt, and the mapper all derive from it.
+2. If the kind should react to `accent`, add it to `ACCENT_KINDS` — the schema rejects an
+   `accent` on a kind that ignores it, on purpose.
+3. Write the renderer in `apps/editor/src/components/preview/Preview.tsx`, following
+   `TableBlock` as the most complete example. Use the `ring()` helper so the inspector can
+   select it.
+4. Branch on the kind inside `ScreenView`. It partitions blocks into `nav`, `stats`, and
+   `rest`; a new kind must land in `rest` or get its own partition.
+5. Add at least two seed instances in `apps/editor/src/lib/seed.ts`. Seed data is what proves
+   a renderer works.
+6. Re-run `verify.mjs` at all three widths.
 
-### Add a renderer that the inspector can edit ✔ works today
+> If a block is rejected by name in `parse.ts`, that is the whitelist working. Do not relax
+> the check to make a payload pass.
 
-For the inspector to reach a block, the block must pass `onSelect` and use the `ring()`
-helper, which draws the dashed selection outline:
+### Add a renderer the inspector can edit ✔ works today
+
+The block must accept `onSelect` and use the `ring()` helper:
 
 ```tsx
 const ring = (inspectOpen: boolean, selected: boolean) =>
@@ -81,15 +83,13 @@ const ring = (inspectOpen: boolean, selected: boolean) =>
     : ''
 ```
 
-Only `title`, `body`, and `accent` are editable — the inspector's contract. If a new
-renderer needs another editable field, extend `UIBlock` and `updateBlock`'s patch type
-together, and keep `updateBlock` away from `ledger`.
+Only `title`, `body`, and `accent` are editable — the inspector's contract. If a renderer
+needs another editable field, widen `UIBlock` **and** `updateBlock`'s patch type together.
 
 ### Add a new shell component ✔ works today
 
 1. Create `apps/editor/src/components/shell/MyThing.tsx`, exporting a named PascalCase
-   function (the codebase uses named exports for components, default export only in
-   `App.tsx`).
+   function (named exports for components; default export only in `App.tsx`).
 2. Use design tokens, not raw Tailwind colours: `text-ink-meta`, `border-rule`,
    `bg-ground-panel`, `text-title`/`text-body`/`text-meta`/`text-micro`.
 3. For any number that changes, add `font-mono tnum` so it does not jitter.
@@ -97,101 +97,131 @@ together, and keep `updateBlock` away from `ledger`.
 
 ### Add a new view ✔ works today
 
-1. Add the id to the `View` union in `apps/editor/src/store/useBuilder.ts`.
+1. Add the id to `View` in `apps/editor/src/store/useBuilder.ts` (currently
+   `'builder' | 'schema'`).
 2. Add it to `NAV` in `apps/editor/src/components/shell/Rail.tsx` with a label and icon.
 3. Create `apps/editor/src/components/views/MyView.tsx`.
 4. Add a branch in `App.tsx`: `{view === 'myview' && <MyView />}`.
 
 ### Add a design token ✔ works today
 
-Edit `theme.extend` in `apps/editor/tailwind.config.js`. Prefer adding to an existing
-semantic group (`ink`, `ground`, `rule`, `action`, `ok`, `warn`, `danger`) over inventing a
-new name. The palette's discipline — one action colour, status colours reserved for
-status — is what makes the UI read as coherent. People copy patterns they can see; a raw
-hex in a component spreads faster than any rule prevents.
+Edit `theme.extend` in `apps/editor/tailwind.config.js`. Prefer an existing semantic group
+(`ink`, `ground`, `rule`, `action`, `ok`, `warn`, `danger`) over inventing a name. One action
+colour and status colours reserved for status is what makes the UI read as coherent; a raw hex
+in a component spreads faster than any rule prevents.
 
-### Add an orchestrator endpoint (not built — binding recipe)
+### Add an orchestrator endpoint ✔ works today
 
-1. Create `apps/orchestrator/src/routes/<resource>.ts` — thin handler only.
-2. Put business logic in `apps/orchestrator/src/services/<resource>/`.
-3. Mount in `app.ts`: `app.use('/api/v1/<resource>', requireAuth, router)`.
-4. If it calls LLM-Kita or Cloudflare: `deductCoins()` **first**, then call, then
-   `refundCoins()` on failure. Explicit timeout (LLM ~60s, Cloudflare ~30s).
-5. Validate the body with Zod; cap prompt length.
-6. Test: auth required → 401; insufficient coins → 402; provider timeout → 504 with no charge.
+1. Add the handler in `apps/orchestrator/src/routes/index.ts` — thin, no business logic.
+2. Put logic in `apps/orchestrator/src/services/`.
+3. Read config through `config.ts`; never touch `process.env` directly.
+4. Match on the path **suffix**, not `c.req.path === '/thing'` — `c.req.path` is the full path.
+5. Return errors via the helpers in `errors.ts` so the `{ data, error }` shape and the UPPER_SNAKE
+   `code` stay consistent.
+6. If it reaches the LLM, gate it behind `FEATURE_GENERATE_ENABLED` and give it an explicit timeout.
+7. Test it through `createApp` **and** once through the entry point.
 
-### Replace a simulated action with a real call (not built — the actual seam)
+### Call the LLM ✔ works today
 
-The four functions to replace in `apps/editor/src/store/useBuilder.ts` are
-`runGeneration`, `runRevision`, `runPublish`, and `topUp`. Each currently:
+`services/generation.ts` composes the prompt, calls `llm/openai-compatible-client.ts`, extracts
+JSON with `llm/extract-json.ts`, and validates with `@rakit/schema`. Follow that shape: the
+timeout comes from `LLM_TIMEOUT_MS`, and the response is never trusted before parsing.
 
-```
-check balance → write ledger row → setTimeout steps → mutate project
-```
+The base URL must be `https://api.llm-kita.com/api/v1` — the marketing site at `llm-kita.com`
+answers every POST with **405**, which reads like a broken client and is the wrong host.
 
-Convert to: `check balance → POST → on error write refund → on success mutate project`.
-Nothing else in the editor knows the backend is fake, so no other file needs to change.
+### Add a migration ✔ works today
+
+1. Create `apps/orchestrator/migrations/000N_name.sql`. Follow the existing files' style:
+   explain *why* in a comment, and make it safe to run against existing rows.
+2. Apply locally: `npm run db:migrate:local` from `apps/orchestrator/`.
+3. Apply remotely: `npm run db:migrate:remote`.
+4. Verify the column actually exists — `wrangler d1 migrations list --remote` can report "no
+   migrations to apply" while saying nothing useful about the schema:
+   ```bash
+   npx wrangler d1 execute rakit-db --remote --command "PRAGMA table_info(projects);"
+   ```
+
+Remember D1's limits: limited `ALTER TABLE`, no `SERIAL`, no sequences. Rebuild tables rather
+than altering columns.
+
+### Replace the simulated publish with a real one (not built — the actual seam)
+
+`runPublish` in `apps/editor/src/store/useBuilder.ts` is the only remaining simulation. It
+currently advances a `setTimeout` chain and mutates project state. Nothing else in the editor
+knows it is fake, so no other file needs to change. It needs `packages/generator/` to exist
+first — there is no DDL generation yet.
 
 ### Generate D1 schema for a user project (not built)
 
-1. Take the schema object from the Context Manager, **not** from raw prompt text.
+1. Take the schema object from the project document, **not** from raw prompt text.
 2. Sanitize every identifier: `^[a-z_][a-z0-9_]{0,62}$`; reject reserved words.
-3. Allowlist column types: `TEXT | INTEGER | REAL | BLOB | NUMERIC` (+ `PRIMARY KEY`,
-   `NOT NULL`, `DEFAULT`, `REFERENCES`).
+3. Allowlist column types — the contract already narrows them to
+   `INTEGER | TEXT | REAL | BOOLEAN`.
 4. Emit `CREATE TABLE IF NOT EXISTS`; use `INTEGER PRIMARY KEY AUTOINCREMENT` for ids.
-5. Record the D1 database id in `generated_projects` **before** applying DDL so a partial
-   failure can be cleaned up.
-
-### Implement an idempotent top-up (not built)
-
-1. Create an `orders` row keyed by `order_id`, status `pending`.
-2. On webhook: verify signature → look up order → if already `paid`, return 200 and do
-   nothing → else insert the ledger credit and set `paid` **in one transaction**.
-3. Never credit from the client-side success redirect. The current `topUp()` credits
-   immediately with the detail "QRIS terverifikasi" — that text describes a verification
-   that does not happen and must not survive into production.
+5. Record the D1 database id **before** applying DDL so a partial failure can be cleaned up.
 
 ## Quick Commands
 
 | Task | Command | Works |
 |------|---------|-------|
-| Dev editor | `cd apps/editor && npm run dev` | ✔ |
-| Typecheck | `cd apps/editor && npx tsc --noEmit` | ✔ |
-| Build | `cd apps/editor && npm run build` | ✔ |
+| Everything (editor + orchestrator) | `npm run dev:all` (root) | ✔ |
+| Dev editor only | `cd apps/editor && npm run dev` | ✔ |
+| Dev orchestrator (Node) | `cd apps/orchestrator && npm run dev` | ✔ |
+| Dev orchestrator (real workerd) | `cd apps/orchestrator && npm run dev:worker` | ✔ |
+| Unit tests | `npm test` (root) | ✔ |
+| Typecheck | `npm run typecheck` (root) | ✔ |
+| Fake LLM provider | `npm run fake-llm` (root) | ✔ |
+| Smoke test | `npm run smoke` (root) | ✔ |
+| ID-preservation guard | `npm run check:branches` (root) | ✔ |
+| Migrate local / remote | `cd apps/orchestrator && npm run db:migrate:local` / `:remote` | ✔ |
 | Layout + console check | `cd apps/editor && node .shots/verify.mjs` | ✔ |
-| Flow check | `cd apps/editor && node .shots/flow.mjs` | ✔ |
 | Screenshots | `cd apps/editor && node .shots/shot.mjs` | ✔ |
+| Deploy Worker | `cd apps/orchestrator && npm run deploy` | ✔ |
 | Docs → Confluence (dry run) | `node scripts/sync-confluence.mjs` | ✔ needs env vars |
 | Docs → Confluence (publish) | `node scripts/sync-confluence.mjs --apply` | ✔ |
-| Unit tests | `npm test` | ✗ not configured |
-| Lint | `npm run lint` | ✗ not configured |
-| Deploy Worker | `npx wrangler deploy` | ✗ no Worker |
+| Lint | — | ✗ not configured |
 
 ## Environment Quick Setup
 
-`.env.example` **does not exist yet**. Create it when the orchestrator is scaffolded:
+Root `.env.example` and `apps/editor/.env.example` both exist — read them, they carry the
+explanations. Summary of what matters:
 
 ```
-LLM_KITA_API_KEY=
-LLM_KITA_BASE_URL=
-MIDTRANS_SERVER_KEY=
-MIDTRANS_CLIENT_KEY=
-MIDTRANS_IS_PRODUCTION=false
-CLOUDFLARE_API_TOKEN=
-CLOUDFLARE_ACCOUNT_ID=
-PLATFORM_DATABASE_URL=
-JWT_SECRET=
-SESSION_SECRET=
+LLM_KITA_API_KEY=            # absent → dev:all starts tools/fake-llm.mjs instead
+LLM_KITA_BASE_URL=https://api.llm-kita.com/api/v1
+LLM_KITA_MODEL=auto
+RAKIT_SHARED_TOKEN=          # containment, NOT auth. dev:all forwards it to both halves.
+FEATURE_GENERATE_ENABLED=false   # only the exact string "true" enables /generate and /revise
+CORS_ALLOWED_ORIGINS=        # browser rule, not access control
+CONFLUENCE_*                 # only for the docs publisher
 ```
 
-Rules: no secret is committed (`.gitignore` covers `.env` and `.env.*`); generated Workers
-receive **no** platform secrets — they are separate trust domains.
+From the editor: `VITE_ORCHESTRATOR_URL` (empty → Vite dev proxy) and `VITE_RAKIT_TOKEN`
+(set for you by `dev:all`).
+
+Rules: no secret is committed (`.gitignore` covers `.env` and `.env.*`); `wrangler.toml` is
+committed, so secrets go in with `wrangler secret put`, never in the file. `VITE_*` is **not**
+secret — Vite inlines it into the browser bundle.
+
+### Production checklist
+
+```bash
+cd apps/orchestrator
+npx wrangler secret list                       # confirm what is actually set
+npx wrangler secret put RAKIT_SHARED_TOKEN     # closes /projects to anonymous callers
+npm run deploy
+curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+  https://rakit-orchestrator.rakit-aliy.workers.dev/api/v1/generate \
+  -H 'Content-Type: application/json' -d '{"prompt":"sistem kasir untuk warung kopi"}'
+# expect 503 while FEATURE_GENERATE_ENABLED is "false"
+```
 
 ## Blueprint Workflow
 
 ```
 /setup                     one-time init (done)
-/atlas                     regenerate these files from code (just ran)
+/atlas                     regenerate these files from code
 /blueprint <feature-name>  what.md → how.md → now.md (review between each)
 /fix <bug-name>            single fix.md
 /spec <feature-name>       read a blueprint + show progress
@@ -200,12 +230,12 @@ receive **no** platform secrets — they are separate trust domains.
 
 ### Recommended next blueprints, in order
 
-1. **`mvp-foundation`** — the whitelisted Impeccable component library plus the single
-   const array that the mapper and the system prompt both read. Everything else depends on
-   this contract existing.
-2. **`coin-billing`** — atomic server-side ledger, debit-before-call, idempotent refunds.
-   The in-memory ledger already encodes the right *discipline*; this makes it enforceable.
-3. **`llm-orchestration`** — Express + LLM-Kita + Zod validation + timeouts.
+1. **`auth`** — the one absence that blocks everything else. Until it exists, `owner_id` is a
+   placeholder and the API must not be publicised.
+2. **`project-provisioning`** — `packages/generator/` (DDL from a schema) plus real D1/Workers
+   creation, replacing the simulated `runPublish`.
+3. **`billing`** — deferred. Pick it up only after the above, and start from the design notes
+   in the PRD and the last section of `conventions.md`.
 
-Start with (1). Creating the Zod contract and whitelist before the LLM call exists is what
-keeps the safety rule from becoming a retrofit.
+The `mvp-foundation` and `llm-orchestration` blueprints are already implemented; read them as
+history rather than as pending work.

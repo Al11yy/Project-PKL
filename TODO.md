@@ -6,65 +6,56 @@ selanjutnya. Setiap butir merujuk file nyata di repo ini.
 **Legenda:** `[ ]` belum · `[~]` sebagian · `[x]` selesai
 **Prioritas:** **P0** menghalangi · **P1** inti MVP · **P2** penting tapi bisa menyusul · **P3** pemolesan
 
+> **Sudah tidak berlaku, jangan dihidupkan lagi:** sistem koin, ledger, saldo, Midtrans, dan
+> top-up telah **dihapus dari produk**. Billing sepenuhnya ada di akun LLM-Kita; repo ini tidak
+> menghitung atau menagih apa pun. Ini aturan non-negosiabel #2 di `CLAUDE.md`. Daftar ini
+> sebelumnya masih memuat butir debit koin, refund, dan webhook Midtrans — semuanya dihapus
+> pada 2026-11-18 karena menyesatkan.
+>
+> Backend **bukan Express** dan tidak pernah akan: orchestrator adalah Hono di Cloudflare
+> Workers (`apps/orchestrator/`). Tidak ada `apps/api/`.
+
 ---
 
-## P0 — Fondasi yang belum ada
+## P0 — Yang menghalangi
 
-Tanpa ini, aplikasi masih prototipe antarmuka dan tidak bisa dipakai sungguhan.
-
-- [ ] **Backend Express.js + TypeScript.** Sesuai `CLAUDE.md`, belum ada satu baris pun.
-      Buat `apps/api/` dengan health check, konfigurasi env, dan graceful shutdown.
-- [ ] **Skema database & migrasi** untuk `users`, `projects`, `ledger_entries`, `payments`.
-      Ledger harus append-only; tidak ada kolom `balance` yang bisa di-`UPDATE`.
-- [ ] **Integrasi LLM-Kita dengan output JSON ketat.** Endpoint generate & revise,
-      timeout eksplisit di setiap panggilan (aturan non-negosiabel #6).
-- [ ] **Validasi Zod atas output LLM.** Tolak komponen di luar whitelist `BlockKind`
-      (`src/lib/types.ts:34`). Ini aturan #1 dan saat ini belum ditegakkan karena LLM
-      belum tersambung.
-- [ ] **Ganti `SEED_LEDGER` / `SEED_PROJECTS` dengan data server.** Keduanya data demo
-      sintetis; `seed.ts` menyatakan sendiri harus diganti sebelum ditunjukkan ke publik.
-- [ ] **Autentikasi.** Belum ada sama sekali. Tanpa ini aplikasi tidak boleh diekspos.
+- [ ] **Autentikasi.** Belum ada sama sekali. `owner_id` di `repositories/projects.ts` masih
+      placeholder, sehingga setiap pemanggil melihat data yang sama. Selama ini kosong,
+      `/api/v1/projects` **terbuka untuk siapa pun** dan aplikasi tidak boleh dipublikasikan.
+      Ini satu-satunya butir yang membuka blokir provisioning dan publish.
+- [ ] **Pasang `RAKIT_SHARED_TOKEN` di production.** Secret ini belum di-set pada Worker,
+      jadi penjagaan token belum aktif di sana meski kodenya sudah siap:
+      `npx wrangler secret put RAKIT_SHARED_TOKEN` dari `apps/orchestrator/`.
+      `/generate` dan `/revise` sudah aman karena `FEATURE_GENERATE_ENABLED = "false"`,
+      tetapi `/projects` masih dapat dibaca tanpa kredensial.
 
 ## P1 — Inti MVP
 
-- [ ] **Debit koin atomik di backend.** Pindahkan `runGeneration` (`store/useBuilder.ts:118`)
-      ke transaksi dengan update kondisional `WHERE balance >= cost`, supaya dua tab tidak
-      bisa membelanjakan koin yang sama.
-- [ ] **Idempotensi per `refId`.** `refId` sudah ada di setiap baris; pakai sebagai kunci
-      unik agar retry tidak menagih dua kali.
-- [ ] **Timeout & refund untuk revisi.** `runRevision` (`:231`) saat ini tidak punya jalur
-      gagal. Samakan dengan `runGeneration`: tulis debit, refund penuh bila timeout LLM.
-      Baris contohnya sudah ada di `seed.ts` ("gagal — batas waktu LLM").
-- [ ] **Webhook Midtrans.** Koin hanya masuk setelah webhook terverifikasi dan signature
-      valid — bukan setelah redirect. Ganti `topUp()` (`:331`) yang sekarang menambah saldo
-      langsung.
-- [ ] **Provisioning Cloudflare D1 + Workers** per proyek. `runPublish` (`:272`) masih
-      simulasi `setTimeout`; sambungkan ke API Cloudflare sungguhan. Satu database per
-      proyek (aturan #4).
-- [ ] **Persistensi state editor.** Saat ini reload menghapus semua pekerjaan. Simpan draft
-      ke server, bukan hanya ke memori.
+- [ ] **Generator DDL.** `packages/generator/` belum ada. Skema proyek belum bisa
+      diterjemahkan menjadi `CREATE TABLE`, sehingga publish tidak punya bahan untuk dijalankan.
+- [ ] **Provisioning Cloudflare per proyek.** `runPublish` di `apps/editor/src/store/useBuilder.ts`
+      masih `setTimeout` simulasi. Sambungkan ke API Cloudflare sungguhan: satu database D1 per
+      proyek (aturan #4), jangan pernah menaruh data pengguna di `rakit-db`.
+- [ ] **Aktifkan `FEATURE_GENERATE_ENABLED` setelah auth ada.** Saat ini `"false"` di
+      `wrangler.toml` dengan sengaja. Membaliknya sebelum auth berarti siapa pun yang menemukan
+      URL Worker dapat membelanjakan kuota LLM-Kita.
 
 ## P2 — Kualitas & keandalan
 
-- [ ] **Test unit untuk logika koin.** `balanceOf`, `applyEntry`, dan seluruh invarian di
-      `KNOWLEDGE_BASE.md` §4 belum punya test. Pakai Vitest; ini area yang paling mahal
-      kalau salah.
-- [ ] **Test integrasi alur gagal → refund.** Pastikan setiap `refunded` berpasangan dengan
-      debit ber-`refId` sama dan nominal sama. Ini kelas bug yang sudah pernah muncul.
-- [ ] **Penanganan error yang bisa dipulihkan.** Saat ini kegagalan hanya jadi toast.
-      Tambahkan tombol "Coba lagi" yang memakai ulang prompt terakhir.
-- [ ] **Rate limiting & kuota** per pengguna pada endpoint LLM.
-- [ ] **Audit aksesibilitas.** `:focus-visible` sudah ditata, tapi belum ada uji keyboard
-      menyeluruh maupun uji pembaca layar pada `Pipeline`, `Inspector`, dan `LedgerView`.
-- [ ] **Pantau biaya LLM.** Log token per permintaan; harga 20/5/50 koin perlu divalidasi
-      terhadap biaya nyata, bukan ditebak.
+- [ ] **Rate limiting & kuota** per pengguna pada endpoint LLM. Belum ada sama sekali; ini
+      pengaman biaya yang sebenarnya setelah auth.
+- [ ] **Penanganan error yang bisa dipulihkan.** Kegagalan saat ini hanya menjadi pesan;
+      belum ada tombol "Coba lagi" yang memakai ulang prompt terakhir.
+- [ ] **Log biaya LLM.** Catat token per permintaan supaya pemakaian bisa dilihat terhadap
+      tagihan LLM-Kita yang sebenarnya.
+- [ ] **Audit aksesibilitas.** `:focus-visible` sudah ditata, tetapi belum ada uji keyboard
+      menyeluruh maupun uji pembaca layar pada `Pipeline`, `Inspector`, dan `Preview`.
 
 ## P3 — Pemolesan
 
-- [ ] **Mode gelap.** Token warna sudah semantik dan terpusat di `tailwind.config.js`,
-      jadi ini pekerjaan mendefinisikan satu set nilai lagi — bukan refactor.
-- [ ] **Pratinjau responsif.** `Preview.tsx` hanya merender satu lebar; tambahkan
-      pratinjau mobile/tablet.
+- [ ] **Mode gelap.** Token warna sudah semantik dan terpusat, jadi ini pekerjaan mendefinisikan
+      satu set nilai lagi — bukan refactor.
+- [ ] **Pratinjau responsif.** `Preview.tsx` merender satu lebar; tambahkan mobile/tablet.
 - [ ] **Ekspor & impor proyek** sebagai JSON.
 - [ ] **Landing page & alur onboarding** untuk pengguna baru.
 - [ ] **Halaman status publik** untuk insiden deploy.
@@ -73,23 +64,24 @@ Tanpa ini, aplikasi masih prototipe antarmuka dan tidak bisa dipakai sungguhan.
 
 ## Utang teknis yang diketahui
 
-Dicatat apa adanya supaya tidak hilang.
+Diverifikasi terhadap kode pada 2026-11-18. Butir yang ternyata sudah beres dihapus, bukan
+dibiarkan menggantung.
 
 | Item | Lokasi | Dampak |
 |------|--------|--------|
-| Semua efek jaringan adalah `setTimeout` | `store/useBuilder.ts` | Tidak ada error nyata; durasi palsu |
-| Tidak ada router — navigasi lewat state | `App.tsx:12` | Tidak ada URL yang bisa dibagikan; reload kehilangan konteks |
-| `hasGenerated` diinisialisasi `true` | `useBuilder.ts:82` | State awal tidak mencerminkan alur pengguna baru |
-| Tidak ada `.env.example` | — | Anggota tim baru tidak tahu variabel yang dibutuhkan |
-| Skill/agent belum dipasang ke `.claude/` | `CLAUDE.md` § Setup status | Sumbernya ada di `.amanah/`, perlu disalin |
+| Pesan tahap generasi memakai timer, bukan progres server | `useBuilder.ts` (`setTimeout`) | Progres yang ditampilkan tidak mencerminkan pekerjaan nyata |
+| Tidak ada router — navigasi lewat state | `App.tsx` | Tidak ada URL yang bisa dibagikan; reload kehilangan konteks |
+| `hasGenerated` di-set tapi tidak pernah dibaca | `useBuilder.ts:68,111,211,255` | Dead state; aman dihapus, bukan bug perilaku |
 | `.shots/` berisi harness ad-hoc | `apps/editor/.shots/` | Skrip verifikasi tidak terdaftar di `package.json` |
+| Atlas kedaluwarsa (2026-07-15) | `.amanah/atlas/` | Mempredasi orchestrator dan `packages/schema`; kode menang bila berbeda |
+| URL remote masih menunjuk repo lama | `.git/config` | GitHub mengalihkan ke `Al11yy/Rakit.ai`; perbarui agar tidak bergantung redirect |
 
 ## Cara memakai daftar ini
 
-1. Kerjakan P0 dari atas; semuanya saling bergantung.
-2. Sebelum menyentuh kode fitur, baca `.amanah/atlas/*.md` dan blueprint fitur terkait
-   (`CLAUDE.md` mewajibkan ini).
-3. Setiap perubahan pada jalur koin wajib disertai test yang membuktikan invarian di
-   `KNOWLEDGE_BASE.md` §4 masih berlaku.
-4. Jalankan `node .shots/verify.mjs` dan `node .shots/flow.mjs` sebelum commit;
-   `BALANCE_AFTER_REFUND` harus tetap **128**.
+1. Kerjakan P0 dari atas. Auth membuka blokir P1; tanpa itu provisioning hanya membakar kuota.
+2. Sebelum menyentuh kode fitur, baca `.amanah/atlas/*.md` dan blueprint terkait
+   (`CLAUDE.md` mewajibkan ini). Ingat atlas masih basi — verifikasi ke kode.
+3. Jangan menambahkan butir yang memuat koin, ledger, saldo, atau Midtrans. Bila muncul
+   dorongan ke sana, baca ulang aturan #2 di `CLAUDE.md` lebih dulu.
+4. Jalankan `npm test` dan `npm run typecheck` sebelum commit. Jalur uang tidak lagi ada,
+   jadi tidak ada invarian saldo yang perlu dijaga.

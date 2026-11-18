@@ -1,9 +1,31 @@
 # Product Requirements Document (PRD)
 
+> ## ⚠️ Status Implementasi — baca sebelum mengutip dokumen ini
+>
+> **Dokumen ini adalah visi produk dan rencana model bisnis. Ia BUKAN deskripsi kode yang
+> ada sekarang.**
+>
+> Untuk fase MVP saat ini, **integrasi payment gateway dan billing belum diimplementasikan
+> dan sengaja ditunda** — fokusnya adalah membuat fungsionalitas inti berjalan lebih dulu.
+> Konsekuensi yang harus dipatuhi saat membangun:
+>
+> | Bagian PRD | Status MVP |
+> |---|---|
+> | Sistem Saldo Koin, top-up QRIS/VA, Midtrans, pemotongan per panggilan | **Ditunda** — tidak ada kode, tidak ada tabel, tidak ada endpoint. Kuota dan biaya sepenuhnya ditanggung akun LLM-Kita. |
+> | Backend "Express.js atau NestJS" | **Diganti.** Backend adalah **Hono di Cloudflare Workers** (`apps/orchestrator/`). Tidak ada dan tidak akan ada `apps/api/`. |
+> | Autentikasi pengguna | **Belum ada.** `owner_id` masih placeholder, jadi API belum aman diekspos publik. |
+> | Provisioning D1/Workers otomatis, publish | **Belum ada.** Publish masih simulasi; `packages/generator/` belum ada. |
+>
+> Arahan arsitektur yang mengikat ada di `CLAUDE.md`; keadaan kode yang sebenarnya ada di
+> `KNOWLEDGE_BASE.md`. Bila keduanya berbeda dengan dokumen ini, **keduanya yang menang.**
+>
+> Billing tetap bagian dari visi produk dan akan dikerjakan pada fase berikutnya. Saat itu
+> terjadi, bagian §3 dan §5 di bawah adalah rujukannya — bukan dihapus.
+
 **Project Name:** [Nama Platform/Codename] – AI-First App Builder for Indonesia  
 **Document Status:** Draft v1.0  
 **Tech Stack:** Node.js, React, Tailwind CSS (Impeccable Style), Cloudflare (Pages, Workers, D1), API LLM-Kita  
-**Monetization Strategy:** Usage-Based Pricing (Koin Prabayar)  
+**Monetization Strategy:** Usage-Based Pricing (Koin Prabayar) — *belum diimplementasikan; lihat banner di atas*  
 
 ---
 

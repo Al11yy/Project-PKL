@@ -11,13 +11,17 @@ web
 Locked in project instructions (`CLAUDE.md`), not re-asked during init:
 
 - Frontend editor: Vite + React + Tailwind CSS + Zustand, hosted on Cloudflare Pages
-- Backend core: Express.js (Node.js + TypeScript)
+- Backend core: Hono on Cloudflare Workers (TypeScript)
 - AI engine: API LLM-Kita, strict JSON output
-- User project DB: Cloudflare D1, one database per project
-- User project compute: Cloudflare Workers
-- Payments: Midtrans (QRIS / Virtual Account), IDR prepaid coins
+- Platform DB: Cloudflare D1 (`rakit-db`) — project metadata and revision history
+- User project DB: Cloudflare D1, one database per project — not provisioned yet
+- User project compute: Cloudflare Workers — not provisioned yet
+- Payments: **not integrated.** Prepaid IDR billing via Midtrans is deferred to a later
+  phase, not removed from the product vision (see `prd_ai_first_app_builder.md`)
 
-No source code exists yet. The repository is documentation only.
+Code exists for the editor, the orchestrator, and the shared contract. Projects are created,
+read, updated and deleted through `/api/v1/projects`, and the editor loads and saves against
+it. Auth and per-project provisioning are the two absences that matter.
 
 ## Users
 
@@ -39,45 +43,51 @@ Success means a user reaches a deployed, working app without writing code or con
 
 The differentiator is the combination of three things that neighboring builders do not hold together:
 
-1. **Local payment reality** — prepaid IDR coin balance via QRIS / Virtual Account, no fixed monthly subscription in USD.
+1. **Local payment reality** — the intended end state is prepaid IDR via QRIS / Virtual Account rather than a fixed USD monthly subscription. **Deferred:** nothing bills today, and no interface may imply otherwise.
 2. **Edge latency and infrastructure on Cloudflare** — Pages, Workers, D1 auto-provisioned per project rather than a shared multi-tenant backend.
 3. **Constrained generation** — the LLM never emits HTML or JavaScript. It returns JSON, validated by Zod, mapped only to a whitelisted component library. Unknown components are rejected.
 
-Point 3 is the mechanism a competitor could not truthfully copy without rebuilding their generation pipeline.
+Point 3 is the mechanism a competitor could not truthfully copy without rebuilding their generation pipeline. It is also the only one fully built today.
 
 ## Operating Context
 
 The core workflow, in order:
 
 1. **Initiation** — user types a raw app idea as a prompt.
-2. **PRD & schema generation** — the Node.js orchestrator sends the prompt to LLM-Kita, which returns a simple PRD structure and a JSON database schema.
+2. **PRD & schema generation** — the orchestrator sends the prompt to LLM-Kita, which returns a simple PRD structure and a JSON database schema.
 3. **UI rendering** — the React frontend reads the JSON and maps it to static components from the approved library.
 4. **Iterative refinement** — the user edits the generated result in a visual fallback editor (text, images, base colors).
-5. **Instant deployment** — "Publish" compiles the code and deploys to Cloudflare Pages plus D1/Workers.
+5. **Instant deployment** — "Publish" provisions and deploys to Cloudflare Pages plus D1/Workers. Currently simulated.
 
 Users arrive with an app idea, not a design brief. They will not provide wireframes, brand palettes, or component specifications. The platform supplies that structure.
 
 ## Capabilities and Constraints
 
-**Confirmed functionality (from PRD):**
+**Built today:**
 
 - Generative UI engine: strict component library, JSON-to-component mapper, visual fallback editor
-- AI orchestrator: context manager holding conversation history and live schema, plus a prompt system that forbids HTML/JS output
-- Cloudflare infrastructure: D1 auto-provisioning via DDL at schema approval, generated REST CRUD endpoints deployed as Workers
-- Billing: prepaid coin wallet funded through Midtrans, deducted on each LLM call and on D1 free-tier overage
+- AI orchestrator: OpenAI-compatible LLM-Kita client, system prompt builder, Zod-validated output
+- Platform persistence: D1 project repository with CRUD and revision history
+- Access control: CORS allowlist, shared-token gate, and a generate flag that is **off** in the deployed Worker
+
+**Planned, not built:**
+
+- Auth — `owner_id` is a placeholder, so the API is not safe to expose publicly
+- DDL generation (`packages/generator/` does not exist) and per-project D1/Workers provisioning
+- Billing — prepaid coins funded through Midtrans, deducted per LLM call. **Deferred to a later phase;** see the PRD for the intended model.
 
 **Non-negotiable rules that constrain interface design:**
 
 1. The LLM never emits HTML or JS. Output is JSON validated by Zod and mapped to whitelisted components only.
-2. Coins are deducted before the LLM call and refunded on failure. Ledger-based with atomic conditional updates — never a bare mutable balance column. The UI must surface balance and deduction state honestly.
-3. Visual Fallback Editor edits cost zero coins. This must read as clearly free to the user at the point of use.
-4. One D1 database per user project. No cross-tenant tables.
+2. **No metering exists in the MVP.** Quota and cost live entirely in the LLM-Kita account. When billing arrives it must deduct before the call and refund on failure, ledger-based with atomic conditional updates — never a bare mutable balance column. No interface may currently show a balance, a cost, or a coin count.
+3. Visual Fallback Editor edits are free and must stay free. When billing lands, this must read as clearly free at the point of use.
+4. One D1 database per user project. No cross-tenant tables. The platform database holds metadata only.
 5. No secrets in code. Generated Workers receive no platform secrets.
 6. All external calls have explicit timeouts.
 
 **Surface scope (confirmed):** two distinct interface families are in scope, and the user chose two separate `DESIGN.md` files rather than one shared system:
 
-- The builder platform itself — editor, dashboard, billing. Operate-mode surface.
+- The builder platform itself — editor, dashboard. Operate-mode surface.
 - The component library that generated user apps are built from. Must stay generic enough to serve apps across many industries and visual identities.
 
 Neither `DESIGN.md` exists yet. Both are established later, by the new-work flow, not by init.
@@ -85,7 +95,7 @@ Neither `DESIGN.md` exists yet. Both are established later, by the new-work flow
 **Open decisions (not decided — do not invent):**
 
 - **Product name.** The PRD carries a placeholder `[Nama Platform/Codename]`. No brand name, logo, or wordmark exists.
-- Pricing: no coin-to-Rupiah rate, no per-operation coin cost, and no free-tier allowance are specified. Do not state or imply numbers in any interface copy.
+- Pricing: no coin-to-Rupiah rate, no per-operation cost, and no free-tier allowance are specified. Do not state or imply numbers anywhere.
 - Deployment claims: no SLA, uptime figure, scale claim, or customer count is established anywhere.
 
 ## Brand Commitments
@@ -94,18 +104,18 @@ None confirmed. No name, logo, voice guide, or binding visual reference exists. 
 
 ## Evidence on Hand
 
-- `prd_ai_first_app_builder.md` — the requirements source of truth.
-- `CLAUDE.md` — locked stack and the six non-negotiable rules.
-- `.amanah/atlas/*.md` — PRD-derived context maps (product, tech, structure, conventions, quickstart).
+- `prd_ai_first_app_builder.md` — the requirements source of truth for the intended product, including the deferred billing model.
+- `CLAUDE.md` — locked stack, the non-negotiable rules, and the access-control model of the deployed Worker.
+- `.amanah/atlas/*.md` — code-derived context maps (product, tech, structure, conventions, quickstart).
 
 **Absences future work must not fabricate:** no testimonials, no named customers, no case studies, no benchmarks, no press coverage, no usage statistics, no screenshots or mockups, no logo assets.
 
 ## Product Principles
 
 1. **The output is constrained by design.** Generation quality comes from a narrow whitelist, not from broader model freedom. Any interface that exposes raw generated markup breaks the product's core guarantee.
-2. **Free editing must stay visibly free.** The fallback editor is where users recover from a bad generation. If editing feels metered, users will re-prompt instead and burn coins.
+2. **Free editing must stay visibly free.** The fallback editor is where users recover from a bad generation. If editing ever feels metered, users will re-prompt instead and spend more than they needed to.
 3. **One technical-literacy floor serves all users.** Advanced controls are progressively disclosed, never assumed. A shop owner and a freelancer use the same surface at different depths.
-4. **Money moves in legible units.** Prepaid coins, explicit deduction, refund on failure, zero-cost edits. No silent charges, no subscription framing.
+4. **Never imply a charge that cannot happen.** No balance, no coin count, no price, and no "top up" affordance appears in the MVP, because nothing bills. When billing lands it must move in legible units — explicit deduction, refund on failure, zero-cost edits, no silent charges.
 5. **The user's app is theirs alone.** Per-project databases and secret-free Workers are visible product promises, not only infrastructure details.
 
 ## Accessibility & Inclusion

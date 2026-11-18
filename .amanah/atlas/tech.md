@@ -1,149 +1,138 @@
 # AI-First App Builder for Indonesia — Technology Stack
 
-> **Regenerated from code on 2026-07-15.** The previous version described a target
-> architecture with no code. The editor now exists; the backend still does not. Both are
-> stated below and marked accordingly.
+> **Regenerated from code on 2026-11-18.** Replaces a version that described Express, an
+> in-memory coin ledger, and a `BALANCE_AFTER_REFUND = 128` invariant — none of which exist.
+> Billing is deferred, not cancelled; see `prd_ai_first_app_builder.md`.
 
 ## Stack As Built
 
 | Layer | Choice | State | Evidence |
 |-------|--------|-------|----------|
-| Language | TypeScript | Built | `apps/editor/tsconfig.json` |
-| Frontend editor | React 18 + Vite 5 + Tailwind 3 | **Built** | `apps/editor/package.json` |
-| State | Zustand 4 | **Built** | `apps/editor/src/store/useBuilder.ts` |
-| Routing | none — state-driven | **Built** | `App.tsx` switches on `view` |
-| E2E harness | Playwright | **Built** | `apps/editor/.shots/{verify,flow,shot}.mjs` |
-| Backend core | Express.js | **Not built** | — |
-| AI engine | API LLM-Kita | **Not built** | — |
-| Database | Cloudflare D1 | **Not built** | — |
-| Compute | Cloudflare Workers | **Not built** | — |
-| Payments | Midtrans | **Not built** | — |
+| Language | TypeScript `^7.0.2` | Built | all three workspaces |
+| Frontend editor | React `^18.3.1` + Vite `^8.3.8` + Tailwind `^3.4.13` | **Built** | `apps/editor/package.json` |
+| State | Zustand `^4.5.5` | **Built** | `apps/editor/src/store/useBuilder.ts` |
+| Routing | none — state-driven (`'builder' \| 'schema'`) | **Built** | `App.tsx`, `useBuilder.ts:17` |
+| Backend core | Hono `^4.13.19` on Cloudflare Workers | **Built** | `apps/orchestrator/src/` |
+| Dev runtime | Node + `tsx watch` on :5181 | **Built** | `apps/orchestrator/src/server.ts` |
+| Contract | Zod `^4.6.7` | **Built** | `packages/schema/src/` |
+| Platform DB | Cloudflare D1 (`rakit-db`) | **Built** | `migrations/`, `repositories/projects.ts` |
+| AI engine | API LLM-Kita, OpenAI-compatible | **Built** | `llm/openai-compatible-client.ts` |
+| Tests | Vitest `^5.1.0` | **Built** | 237 tests across 14 files |
+| E2E harness | Playwright `^1.65.1` | **Built** | `apps/editor/.shots/` |
+| User project DB/compute | D1 + Workers, one per project | **Not built** | `runPublish` is simulated |
+| DDL generation | `packages/generator/` | **Not built** | does not exist |
+| Auth | — | **Not built** | `owner_id` placeholder |
+| Payments | Midtrans | **Deferred** | no code; vision only, per PRD |
 
-Exact frontend versions from `package.json`: React `^18.3.1`, Zustand `^4.5.5`,
-Vite `^5.4.8`, Tailwind `^3.4.13`, TypeScript `^7.0.2`, Playwright `^1.65.1`.
-
-Dev server runs on **port 5180 with `--strictPort`** (`vite.config.ts`). Two instances
-cannot coexist; a second `npm run dev` exits with "Port 5180 is already in use".
+Editor dev server runs on **port 5180 with `strictPort`**; a second instance fails rather than
+picking another port. The orchestrator's Node entry uses **5181**, `wrangler dev` **8787**.
 
 ## Databases
 
-Nothing is persisted. There is no database, local or remote.
-
-- **D1 (SQLite dialect)**: intended for the *end user's* generated app data, one database
-  per published project. Not provisioned.
-- **Platform database** (users, coin ledger, session context, project metadata):
-  **still not chosen.** Assume D1 or Postgres-on-Hyperdrive; do not assume SQLite-only
-  syntax without confirming.
+- **Platform DB — D1 `rakit-db`.** Holds metadata only: `projects` (with `revision`) and
+  `project_revisions`. Never user app data.
+- **User project DB — D1, one per project.** Not provisioned.
 - D1 constraints that will bite when DDL generation is written: no `SERIAL`, no sequences,
-  limited `ALTER TABLE`. Use `INTEGER PRIMARY KEY AUTOINCREMENT` or ULID/TEXT ids, and
-  rebuild tables rather than `ALTER COLUMN`.
+  limited `ALTER TABLE`. Use `INTEGER PRIMARY KEY AUTOINCREMENT` or TEXT ids, and rebuild
+  tables rather than `ALTER COLUMN`.
 
-The in-memory ledger shape in `apps/editor/src/lib/types.ts` is the closest thing to a
-schema contract today, and it should inform the eventual table:
-
-```ts
-interface LedgerEntry {
-  id: string
-  at: string
-  label: string
-  detail: string
-  coins: number      // negative = out, positive = in/refund
-  outcome: 'spent' | 'free' | 'refunded' | 'failed'
-  refId: string      // binds a debit to its refund
-}
-```
+There is **no ledger table and no balance column**, in either database. Do not add one
+without an explicit decision to start the billing phase.
 
 ## External Services
 
-| Service | Purpose | Failure Mode | State |
-|---------|---------|--------------|-------|
-| API LLM-Kita | Prompt → PRD + JSON schema + component tree | No response → no coins burned, return retry prompt | Not integrated |
-| Midtrans | QRIS / VA top-ups | Webhook is the only source of truth for crediting coins | Not integrated |
-| Cloudflare API | Create D1 databases, deploy Pages/Workers | Partial deploy (D1 created, Worker failed) must be recoverable | Not integrated |
+| Service | Purpose | Timeout | State |
+|---------|---------|---------|-------|
+| API LLM-Kita | Prompt → PRD + JSON schema + component tree | `LLM_TIMEOUT_MS` (60000) | **Integrated** |
+| Cloudflare API | Create D1 databases, deploy Pages/Workers | — | Not integrated |
+| Midtrans | QRIS / VA top-ups | — | **Deferred** — no integration, no plan to add before auth |
 
-Every simulated operation in the editor is a `setTimeout` chain in
-`store/useBuilder.ts`: generation is 5 steps × 700 ms, revision 1,600 ms, publish
-3 steps × 900 ms. These durations are invented and carry no meaning.
+The LLM-Kita **API** is `https://api.llm-kita.com/api/v1`, not the marketing site at
+`https://llm-kita.com`, which answers every POST with 405. `LLM_KITA_BASE_URL` must include
+`/api/v1`; the client appends `/chat/completions`.
 
 ## Key Libraries
 
-**Installed:** `react`, `react-dom`, `zustand`, `tailwindcss`, `vite`, `typescript`,
-`playwright`, `autoprefixer`, `postcss`, `@vitejs/plugin-react`, `@types/react`,
-`@types/react-dom`.
+`react`, `react-dom`, `zustand`, `tailwindcss`, `vite`, `typescript`, `playwright`,
+`autoprefixer`, `postcss`, `@vitejs/plugin-react`; plus `hono`, `wrangler`,
+`@cloudflare/workers-types`, `zod`, `vitest`.
 
-**Intended but not installed:**
-
-- `zod` — validate LLM JSON before it reaches the mapper. **Absent today**, so LLM output
-  is currently trusted. This is the single most important untaken safety step.
-- `express`, `midtrans-client`, `wrangler`, `@cloudflare/workers-types`, `vitest`.
-
-There is no unit-test runner. Verification is Playwright-driven and screenshot-based.
+**Zod 4.6.7, not 3.23.** `npm audit` flagged CVE-2023-54404 on zod < 4.6.6. The described
+vector does not reach this code (every array carries `.max()`), but shipping a known-open
+advisory is not a defensible default. `npm audit --omit=dev` reports 0 vulnerabilities.
 
 ## Architecture Pattern (as built)
 
 ```
 Rail ─┬─ Editor  → Pipeline → PromptRow → Preview ──┬─ Inspector (free edits)
-      ├─ Skema   → SchemaView                       │
-      └─ Riwayat → LedgerView                       └─ Toasts
+      └─ Skema   → SchemaView                       └─ Toasts
                           │
                     useBuilder (Zustand)
-              projects · ledger · view · run states
+                   projects · view · run states
                           │
-                  setTimeout simulation  ← the seam where the
-                                            orchestrator will attach
+                    lib/api.ts  (HTTP)
+                          │
+        orchestrator → createApp()  ← one app, two entries
+              ├─ worker.ts  (Cloudflare Workers, deployed)
+              └─ server.ts  (Node, dev)
+                          │
+        routes → services/generation → llm client → LLM-Kita
+                          │
+                  repositories/projects → D1
 ```
 
-All state lives in one Zustand store. There is no service layer, no data layer, and no
-network layer — so there is no seam to swap except `useBuilder`'s action functions
-(`runGeneration`, `runRevision`, `runPublish`, `topUp`). Those four functions are where
-the backend will connect.
+The seam is `apps/editor/src/lib/api.ts`. State lives in one Zustand store; there is no
+separate service layer in the editor.
 
-## Auth Flow
+## Two Entry Points, One App
 
-- Platform users authenticate to the Express orchestrator. **Mechanism still not
-  specified**; JWT with refresh was the intended default. Not implemented.
-- Published user apps need their own auth story. Not defined, and there is nothing to
-  protect yet.
-- Secrets must come from env vars / Cloudflare secrets. `.gitignore` already excludes
-  `.env` and `.env.*`. There is still no `.env.example`, so required variables are
-  undocumented outside `quickstart.md`.
+`worker.ts` and `server.ts` both build `createApp()` and contain no routing or business
+logic. Configuration arrives as an explicit `Env` object, never `process.env`, which is what
+lets one codebase run on both runtimes without a `nodejs_compat` polyfill.
+
+**Gotcha that bit once:** `server.ts` called `serve({ fetch: app.fetch })`. `@hono/node-server`
+supplies no `env`, so `c.env` was `undefined` and the token gate never ran on the Node path —
+while every test stayed green, because tests pass their own `env`. Fixed by
+`createNodeHandler(env)`, guarded by `node-handler.test.ts`.
+
+## Access Control
+
+Not authentication. Two layers, both documented in `CLAUDE.md`:
+
+- `FEATURE_GENERATE_ENABLED` — `/generate` and `/revise` return 503 `FEATURE_DISABLED`
+  unless exactly `"true"`. **Off by default**, including when unset. Lives in Worker
+  environment; unreadable by clients. This is the layer that holds.
+- `RAKIT_SHARED_TOKEN` — required as `X-Rakit-Token` on everything except `/health` and the
+  CORS preflight. Containment only: Vite inlines the editor's copy into the browser bundle.
+
+`CORS_ALLOWED_ORIGINS` is a browser rule, not access control — `curl` ignores it.
 
 ## Development Commands
 
-Only the editor has scripts today (`apps/editor/package.json`):
+From the root:
 
-| Command | Meaning | Exists |
-|---------|---------|--------|
-| `npm run dev` | Vite dev server on port 5180 | Yes |
-| `npm run build` | Production build to `dist/` (gitignored) | Yes |
-| `npm run preview` | Serve the production build | Yes |
-| `npm test` | Vitest | **No** — not configured |
-| `npm run lint` | ESLint + Prettier | **No** — not configured |
+| Command | Meaning |
+|---------|---------|
+| `npm run dev:all` | Editor + orchestrator together |
+| `npm test` | Vitest across all workspaces |
+| `npm run typecheck` | `tsc --noEmit` across all workspaces |
+| `npm run fake-llm` | Stub LLM provider, no API key |
+| `npm run smoke` / `smoke:refusal` | End-to-end against the fake provider |
+| `npm run check:branches` | ID-preservation invariants |
 
-Verification harness (run from `apps/editor/`):
+From `apps/orchestrator/`: `npm run dev` (:5181), `npm run dev:worker` (:8787),
+`npm run db:migrate:local`, `npm run db:migrate:remote`, `npm run deploy`.
 
-```bash
-node .shots/verify.mjs   # overflow + console errors at 1440/1280/1024px
-node .shots/flow.mjs     # free-inspector, fail+refund, publish paths
-```
+Verification harness, from `apps/editor/`: `node .shots/verify.mjs` (overflow + console
+errors at 1440/1280/1024px), `node .shots/flow.mjs` (free-inspector and publish paths).
 
-`flow.mjs` prints `BALANCE_AFTER_REFUND`, which must stay **128**.
+## Billing (deferred)
 
-## Billing Mechanics (technical)
+Target, unchanged from the PRD: `coin_ledger(id, user_id, delta, reason, ref_id,
+balance_after, created_at)`, balance derived or cached, atomic conditional
+`UPDATE ... WHERE balance >= cost`, Midtrans webhook idempotent on `order_id`.
 
-**Target** (unchanged from the PRD): `coin_ledger(id, user_id, delta, reason, ref_id,
-balance_after, created_at)`. Balance derived or cached. Deduction is a check-then-act
-needing an atomic conditional `UPDATE ... WHERE balance >= cost`. Midtrans webhook
-idempotent on `order_id` / `transaction_id`.
-
-**What actually exists** (`apps/editor/src/store/useBuilder.ts`): an in-memory array with
-a derived balance.
-
-```ts
-const balanceOf = (ledger) => ledger.reduce((sum, e) => sum + e.coins, STARTER_BALANCE_BASE)
-```
-
-This correctly implements the *discipline* — balance is never a mutable stored number —
-but not the *guarantees*. There is no atomicity, so two concurrent runs in two tabs would
-both pass the `balance < cost` check and both spend. That check-then-act race is real and
-must be closed server-side before any coin is worth real money.
+**No part of this exists.** The in-memory ledger type and `balanceOf` helper were deleted
+along with the ledger view. When the phase starts, the discipline to preserve is: no mutable
+stored balance, deduction before the LLM call, `refId`-keyed idempotent refund, and the
+check-then-act race closed server-side before any coin is worth real money.
