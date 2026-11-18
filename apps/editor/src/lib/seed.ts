@@ -1,4 +1,4 @@
-import { COIN_COST, type LedgerEntry, type Project } from './types'
+import type { Project } from './types'
 
 /**
  * Synthetic demonstration data. It exists so every state in the surface is
@@ -139,56 +139,3 @@ export const SEED_PROJECTS: Project[] = [
     screens: [],
   },
 ]
-
-export const SEED_LEDGER: LedgerEntry[] = [
-  {
-    id: 'l-1',
-    at: '09:12',
-    label: 'Generate PRD & UI',
-    detail: '12 tabel · 8 layar',
-    coins: -20,
-    outcome: 'spent',
-    refId: 'gen_8f21c4',
-  },
-  {
-    id: 'l-2',
-    at: '09:14',
-    label: 'Revisi lewat editor',
-    detail: 'judul & warna brand',
-    coins: 0,
-    outcome: 'free',
-    refId: 'edit_2a90de',
-  },
-  // The debit and its refund are a matched pair sharing a refId: a refund row
-  // with no matching charge, or one whose amount differs from COIN_COST.revise,
-  // would make the ledger look like it balances while hiding the real number.
-  {
-    id: 'l-2b',
-    at: '09:16',
-    label: 'Revisi lewat prompt',
-    detail: 'gagal — batas waktu LLM',
-    coins: -COIN_COST.revise,
-    outcome: 'failed',
-    refId: 'gen_c73b11',
-  },
-  {
-    id: 'l-3',
-    at: '09:16',
-    label: 'Refund otomatis',
-    detail: 'revisi gagal sebelum ada output',
-    coins: COIN_COST.revise,
-    outcome: 'refunded',
-    refId: 'gen_c73b11',
-  },
-  {
-    id: 'l-4',
-    at: '09:18',
-    label: 'Terbitkan ke Cloudflare',
-    detail: 'Pages · D1 · Worker',
-    coins: -50,
-    outcome: 'spent',
-    refId: 'dep_51ee07',
-  },
-]
-
-export const STARTER_BALANCE = 128

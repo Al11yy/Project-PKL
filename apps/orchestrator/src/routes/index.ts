@@ -4,8 +4,36 @@ import { projectSchema } from '@rakit/schema'
 import type { LlmClient } from '../llm/client'
 import { LlmError, LlmTimeoutError } from '../llm/errors'
 import { generateProject, reviseProject } from '../services/generation'
-import { badRequest } from '../errors'
+import { badRequest, databaseUnavailable, featureDisabled } from '../errors'
+import { checkToken } from '../auth'
+import { isGenerateEnabled } from '../config'
+import { logger } from '../logger'
+import {
+  createProject,
+  deleteProject,
+  getProject,
+  listProjects,
+  upsertProject,
+} from '../repositories/projects'
 import type { Env } from '../config'
+
+/**
+ * The D1 binding, or a 503 that names it.
+ *
+ * Checked at the edge of every persistence route rather than assumed. A `c.env.DB` that
+ * silently became `undefined` because a `wrangler.toml` binding was removed would otherwise
+ * throw a `TypeError` on the first `.prepare`, which `toApiError` flattens into a generic
+ * 500 and hides the actual cause — a missing binding — from whoever has to fix it.
+ */
+function requireDb(env: Env | undefined): D1Database {
+  const db = env?.DB
+  if (db === undefined) {
+    throw databaseUnavailable(
+      'Database D1 belum terhubung. Tambahkan binding DB pada wrangler.toml, lalu deploy ulang.',
+    )
+  }
+  return db
+}
 
 /**
  * Request bodies.
@@ -151,6 +179,48 @@ export function createRouter(
     })
   })
 
+  /**
+   * The gate, applied to everything registered after it.
+   *
+   * `/health` is registered *above* this line on purpose: it reports only whether a key exists,
+   * spends nothing, and needs to stay reachable so an operator can tell "the Worker is down"
+   * from "my token is wrong" without holding the token. Everything below it — the project
+   * routes and both provider routes — requires the token when one is configured.
+   *
+   * Registered before the routes rather than inside each handler: a check that lives in each
+   * handler is a check a new route can silently omit, and the omission would look exactly like
+   * a working endpoint.
+   */
+  router.use('*', async (c, next) => {
+    const rejection = checkToken(c.req.raw, c.env)
+    if (rejection !== null) throw rejection
+    await next()
+  })
+
+  /**
+   * The generate/revise switch, also applied to everything registered after it.
+   *
+   * Placed here rather than inside the two handlers so `/projects` is unaffected — persistence is
+   * free and stays available while generation is off. The refusal happens before any provider
+   * call, which is the whole point: a disabled deployment must not spend a token's worth of
+   * quota on a request it is going to refuse.
+   */
+  router.use('*', async (c, next) => {
+    /**
+     * Matched by suffix, not equality. This router is mounted at `/api/v1`, but `c.req.path`
+     * reports the *full* request path, so `=== '/generate'` never matches and the flag silently
+     * does nothing — which is how a "disabled" endpoint stays enabled. The suffix form is
+     * independent of where the router is mounted.
+     */
+    const path = c.req.path
+    const isProviderRoute = path.endsWith('/generate') || path.endsWith('/revise')
+    if (isProviderRoute && !isGenerateEnabled(c.env)) {
+      logger.warn('feature.disabled', { path: c.req.path })
+      throw featureDisabled(path.split('/').pop() ?? 'generate')
+    }
+    await next()
+  })
+
   router.post('/generate', async (c) => {
     const body = parseBody(generateRequestSchema, await readJson(c), 'prompt')
 
@@ -172,6 +242,78 @@ export function createRouter(
     } finally {
       dispose()
     }
+  })
+
+  /**
+   * Persistence. Three verbs on the same resource, each with one job.
+   *
+   * `GET` lists, `POST` creates, `PUT /:id` updates. `PUT` upserts rather than 404-ing on a
+   * missing row: a project can come from the editor's seed data, which was never saved, and
+   * the first edit of it must create the row. `PATCH` would be the more precise verb for a
+   * partial update, but the client always sends the whole tree — the server has no sight of
+   * what changed inside it — so an upsert of the whole document is what the data actually is.
+   */
+  router.get('/projects', async (c) => {
+    const db = requireDb(c.env)
+
+    const limit = Number.parseInt(c.req.query('limit') ?? '', 10)
+    const offset = Number.parseInt(c.req.query('offset') ?? '', 10)
+
+    const projects = await listProjects(db, {
+      limit: Number.isFinite(limit) ? limit : undefined,
+      offset: Number.isFinite(offset) ? offset : undefined,
+    })
+
+    return c.json({ data: projects, error: null })
+  })
+
+  router.get('/projects/:id', async (c) => {
+    const db = requireDb(c.env)
+    const project = await getProject(db, c.req.param('id'))
+    return c.json({ data: { project }, error: null })
+  })
+
+  router.post('/projects', async (c) => {
+    const db = requireDb(c.env)
+
+    /**
+     * The body *is* the project, not `{ project }`. A wrapper would be a second place for the
+     * shape to be stated and a second chance for it to disagree; the editor already holds a
+     * project and sends exactly that.
+     */
+    const body = parseBody(projectSchema, await readJson(c), '(root)')
+    const project = await createProject(db, body)
+
+    return c.json({ data: { project }, error: null }, 201)
+  })
+
+  router.put('/projects/:id', async (c) => {
+    const db = requireDb(c.env)
+    const body = parseBody(projectSchema, await readJson(c), '(root)')
+
+    /**
+     * The path id wins over the body id, and a mismatch is refused rather than resolved.
+     *
+     * Silently trusting the path would write a project under an id it does not carry, and
+     * silently trusting the body would let a request to `/projects/a` modify `b`. Neither is
+     * recoverable by the client, so the ambiguity is an error.
+     */
+    const id = c.req.param('id')
+    if (body.id !== id) {
+      throw badRequest(
+        'ID_MISMATCH',
+        `Id pada path (${id}) tidak sama dengan id pada isi permintaan (${body.id}).`,
+      )
+    }
+
+    const project = await upsertProject(db, body)
+    return c.json({ data: { project }, error: null })
+  })
+
+  router.delete('/projects/:id', async (c) => {
+    const db = requireDb(c.env)
+    await deleteProject(db, c.req.param('id'))
+    return c.body(null, 204)
   })
 
   router.post('/revise', async (c) => {

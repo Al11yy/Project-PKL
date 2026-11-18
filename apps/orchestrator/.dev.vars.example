@@ -8,5 +8,22 @@
 #
 # Deployed Workers do not read this file. Use `wrangler secret put <NAME>` for the deployed
 # value; the two are independent stores and updating one does not update the other.
+#
+# IMPORTANT: `npm run dev:all` does NOT read this file. That script starts `server.ts`, a plain
+# Node process, and reads the root `.env` instead. This file only matters when you run
+# `wrangler dev` yourself.
 
 LLM_KITA_API_KEY=isi-api-key-dari-llm-kita-com
+
+# The shared token every API request must present, except /health and the CORS preflight.
+#
+# This is containment, not authentication: the editor is a browser app, so any token it sends
+# is readable in DevTools. It stops crawlers and scanners, not people. Leave it empty locally
+# if you prefer the API to be open on localhost.
+RAKIT_SHARED_TOKEN=
+
+# Whether /generate and /revise are served. Only the exact string `true` enables them.
+#
+# Off by default. That is deliberate for the deployed Worker — an endpoint that spends quota
+# should not be reachable until auth exists. Locally you will usually want it on.
+FEATURE_GENERATE_ENABLED=false

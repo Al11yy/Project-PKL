@@ -19,13 +19,6 @@ export type Project = ParsedProject
 export type Table = ParsedTable
 export type Column = ParsedColumn
 
-export const COIN_COST = {
-  generate: 20,
-  revise: 5,
-  manualEdit: 0,
-  publish: 50,
-} as const
-
 export type PipelineStage = 'prompt' | 'schema' | 'ui' | 'edit' | 'publish'
 
 export const PIPELINE: { id: PipelineStage; label: string }[] = [
@@ -37,13 +30,3 @@ export const PIPELINE: { id: PipelineStage; label: string }[] = [
 ]
 
 export type StageState = 'done' | 'active' | 'pending'
-
-export interface LedgerEntry {
-  id: string
-  at: string
-  label: string
-  detail: string
-  coins: number
-  outcome: 'spent' | 'free' | 'refunded' | 'failed'
-  refId: string
-}

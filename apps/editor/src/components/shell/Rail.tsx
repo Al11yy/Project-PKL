@@ -1,13 +1,10 @@
 import type { ReactNode } from 'react'
-import { COIN_COST } from '../../lib/types'
 import { useBuilder, type View } from '../../store/useBuilder'
-import { ActionButton } from '../ui/Button'
-import { IconCoins, IconLayers, IconPlus, IconTable } from '../ui/Icons'
+import { IconLayers, IconPlus, IconTable } from '../ui/Icons'
 
 const NAV: { id: View; label: string; icon: ReactNode }[] = [
   { id: 'builder', label: 'Editor', icon: <IconLayers /> },
   { id: 'schema', label: 'Skema', icon: <IconTable /> },
-  { id: 'ledger', label: 'Riwayat koin', icon: <IconCoins /> },
 ]
 
 export function Rail() {
@@ -16,10 +13,10 @@ export function Rail() {
   const view = useBuilder((s) => s.view)
   const setView = useBuilder((s) => s.setView)
   const setActive = useBuilder((s) => s.setActive)
-  const balance = useBuilder((s) => s.balance())
-  const topUp = useBuilder((s) => s.topUp)
 
-  const low = balance < COIN_COST.generate
+  const loaded = useBuilder((s) => s.loaded)
+  const loading = useBuilder((s) => s.loading)
+  const loadError = useBuilder((s) => s.loadError)
 
   return (
     <aside className="flex w-[248px] shrink-0 flex-col border-r border-rule bg-ground-panel">
@@ -94,32 +91,35 @@ export function Rail() {
         </button>
       </div>
 
+      {/**
+       * The footer used to be a coin balance and a top-up button. Both are gone: there are no
+       * coins. What replaces them is the state that actually matters now that projects live on
+       * a server — whether this list is the server's or the fallback seed.
+       */}
       <div className="border-t border-rule p-3">
         <div className="rounded-lg border border-rule bg-ground p-3">
-          <div className="flex items-baseline justify-between">
+          <div className="flex items-center gap-2">
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                loadError !== null ? 'bg-warn-ink' : loaded ? 'bg-ok-ink' : 'bg-ink-meta'
+              }`}
+            />
             <span className="text-micro font-semibold uppercase tracking-[0.07em] text-ink-meta">
-              Saldo koin
+              {loadError !== null ? 'Data contoh' : loading ? 'Memuat…' : loaded ? 'Tersimpan' : 'Menyiapkan…'}
             </span>
-            <span className="tnum font-mono text-figure font-bold text-ink">{balance}</span>
           </div>
-          <div
-            className={`mt-1 text-[11.5px] leading-4 ${low ? 'text-warn-ink' : 'text-ink-meta'}`}
-          >
-            {low
-              ? `Kurang dari ${COIN_COST.generate} — generate butuh ${COIN_COST.generate} koin.`
-              : `Generate butuh ${COIN_COST.generate} · terbit butuh ${COIN_COST.publish}.`}
-          </div>
-          {/* No price badge here: topping up buys coins, it never spends them.
-              A "gratis" chip on a purchase would be the exact lie the rest of
-              this surface exists to avoid. */}
-          <ActionButton
-            className="mt-2.5 w-full"
-            variant="secondary"
-            size="sm"
-            onClick={() => topUp(100)}
-          >
-            Isi saldo
-          </ActionButton>
+          <p className="mt-1 text-[11.5px] leading-4 text-ink-meta">
+            {/**
+             * Each state says which copy of the data the user is looking at, because the
+             * difference is invisible otherwise — the seed and the server hold projects with
+             * the same names, so a failed load looks like a working app.
+             */}
+            {loadError !== null
+              ? `Tidak dapat memuat proyek dari server. Yang tampil adalah data contoh. ${loadError}`
+              : loaded
+                ? 'Proyek Anda tersimpan di server.'
+                : 'Menyiapkan proyek…'}
+          </p>
         </div>
       </div>
     </aside>

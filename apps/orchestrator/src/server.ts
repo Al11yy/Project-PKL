@@ -1,7 +1,6 @@
 import { serve } from '@hono/node-server'
-import { createApp } from './app'
 import { ConfigError, loadLlmConfig, loadServerConfig, type Env } from './config'
-import { OpenAiCompatibleClient } from './llm/openai-compatible-client'
+import { createNodeHandler } from './node-handler'
 import { logger } from './logger'
 
 /**
@@ -33,10 +32,24 @@ function main(): void {
     throw error
   }
 
-  const app = createApp(new OpenAiCompatibleClient(llmConfig), llmConfig.timeoutMs)
+  /**
+   * Built by `createNodeHandler`, which closes over `env`.
+   *
+   * Passing `app.fetch` directly would leave `c.env` undefined on every request — Hono takes
+   * bindings as a second argument the Node adapter never supplies — and every check that reads
+   * `env` would silently do nothing. See `node-handler.ts`.
+   */
+  const handler = createNodeHandler(env)
 
-  const server = serve({ fetch: app.fetch, port: serverConfig.port }, () => {
-    logger.info('server.listening', { port: serverConfig.port, model: llmConfig.model })
+  const server = serve({ fetch: handler, port: serverConfig.port }, () => {
+    // The two flags are logged because a misconfigured deployment is otherwise indistinguishable
+    // from a client sending the wrong token: both look like a 401.
+    logger.info('server.listening', {
+      port: serverConfig.port,
+      model: llmConfig.model,
+      tokenRequired: (env.RAKIT_SHARED_TOKEN ?? '').trim() !== '',
+      generateEnabled: env.FEATURE_GENERATE_ENABLED === 'true',
+    })
   })
 
   /**

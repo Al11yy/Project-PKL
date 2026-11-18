@@ -12,16 +12,40 @@ The complete requirements live in [prd_ai_first_app_builder.md](prd_ai_first_app
 That document is the source of truth for *what* to build.
 
 **Current state: working monorepo, pre-MVP.** Code exists for the editor, the
-orchestrator, and the shared contract. The orchestrator now runs on Cloudflare Workers
-(Hono), with a D1 schema and migrations in place. Still absent: auth, editor persistence,
-and per-project provisioning. Do not assume a file exists — verify with glob/grep before
+orchestrator, and the shared contract. The orchestrator runs on Cloudflare Workers (Hono)
+with D1 persistence: projects are created, read, updated and deleted through
+`/api/v1/projects`, and the editor loads and saves against it. Still absent: auth and
+per-project provisioning. Do not assume a file exists — verify with glob/grep before
 citing a path.
+
+**The API is gated, but not authenticated.** Two layers protect the deployed Worker's LLM
+quota, and neither is real auth:
+
+- **`FEATURE_GENERATE_ENABLED`** — `/generate` and `/revise` return 503 `FEATURE_DISABLED`
+  unless this is exactly `true`. **Off by default**, including when unset. This is the layer
+  that actually holds: it lives in the Worker's own environment and cannot be read by a client.
+- **`RAKIT_SHARED_TOKEN`** — every route except `/health` and the CORS preflight requires a
+  matching `X-Rakit-Token`. It is **containment, not authentication**: the editor is a browser
+  app, so the token is inlined into its bundle by Vite and readable in DevTools. It deters
+  crawlers and scanners, nothing else.
+
+`/health` stays open on purpose — it spends nothing and reports only whether a key exists, so
+an operator can tell "the Worker is down" from "my token is wrong" without holding the token.
+
+Do not describe the shared token as auth in docs or UI, and do not let it survive the arrival
+of real auth. It is a stopgap against a public URL with a working API key on it.
 
 **Billing was removed from the product.** There is no coin ledger, no balance, and no
 Midtrans. Quota and payment are handled entirely by the LLM-Kita account: the orchestrator
 forwards requests with an API key, and nothing in this repository meters or charges for them.
-Any `COIN_COST`, `topUp()`, or `balance()` still present in the editor is a leftover from the
-previous design and is scheduled for deletion — do not build on it.
+The coin UI, `COIN_COST`, `topUp()` and `balance()` have been deleted — do not reintroduce
+them without an explicit decision.
+
+**The LLM-Kita API is not the LLM-Kita website.** The API is at
+`https://api.llm-kita.com/api/v1` (OpenAI-compatible, model `auto`). The marketing site at
+`https://llm-kita.com` answers every `POST` with **405**, which reads like a broken client and
+is actually the wrong host. `LLM_KITA_BASE_URL` must include `/api/v1`; the client appends
+`/chat/completions` to it.
 
 ### Workspace layout
 
@@ -48,13 +72,14 @@ code run on both runtimes without a `nodejs_compat` polyfill.
 | LLM provider seam (OpenAI-compatible) | `apps/orchestrator/src/llm/` |
 | System prompt builder | `apps/orchestrator/src/prompt/` |
 | Worker entry + D1 schema/migrations | `apps/orchestrator/src/worker.ts`, `migrations/` |
-| Unit tests (146 across 7 files) | `**/*.test.ts` |
+| D1 project repository (CRUD + revisions) | `apps/orchestrator/src/repositories/projects.ts` |
+| Editor persistence (load on mount, save on edit) | `apps/editor/src/store/useBuilder.ts` |
+| CORS allowlist, enforced at the worker entry | `apps/orchestrator/src/cors.test.ts`, `src/worker.test.ts` |
+| Unit tests (188 across 10 files) | `**/*.test.ts` |
 
 | What is NOT built | Consequence |
 |-------------------|-------------|
-| Editor persistence | Projects come from `seed.ts`; reload loses work |
 | Auth | Do not expose the orchestrator; `owner_id` is a placeholder |
-| Project repository (D1 reads/writes) | Tables exist, nothing queries them yet |
 | Per-project D1 / Workers provisioning | Publish is still simulated |
 | `packages/generator/` | DDL generation has no home yet |
 
@@ -109,7 +134,9 @@ The editor also runs standalone: `cd apps/editor && npm run dev` (port 5180,
 4. **One D1 database per user project.** No cross-tenant tables in a generated app's database.
    The platform database (`rakit-db`) holds metadata only, never user app data.
 5. **No secrets in code** — env vars / Cloudflare secrets only. `.dev.vars` and `.env` are
-   gitignored; generated Workers get no platform secrets.
+   gitignored; generated Workers get no platform secrets. `VITE_*` variables are **not**
+   secrets: Vite inlines them into the browser bundle. The shared token is passed this way
+   knowingly and must never be treated as a credential.
 6. **All external calls have explicit timeouts.**
 
 ## Project Context Maps (Atlas)

@@ -50,25 +50,79 @@ export class NetworkError extends Error {
 }
 
 /**
- * The dev server proxies `/api` to the orchestrator, so the browser sees one origin and no
- * CORS preflight is involved. `VITE_ORCHESTRATOR_URL` overrides it for a deployed editor
- * that talks to a server elsewhere.
+ * Where the orchestrator lives.
+ *
+ * There is exactly one variable, `VITE_ORCHESTRATOR_URL`. It previously had a sibling the
+ * store read for import-time validation while this module read only this one, so a typo could
+ * validate against one server and call another. One name, one server.
+ *
+ * Empty means same-origin, which is correct under Vite: the dev server proxies `/api` to the
+ * orchestrator (see `vite.config.ts`), so the browser sees one origin and no CORS applies.
+ * Point it at the Worker for a build without a proxy — the deployed editor on Pages, or a
+ * Node dev server on a different port. The Worker's `CORS_ALLOWED_ORIGINS` must list the
+ * editor's origin in that case, or the browser blocks the request before it is sent.
  */
-const BASE = import.meta.env.VITE_ORCHESTRATOR_URL ?? ''
+const BASE = (import.meta.env.VITE_ORCHESTRATOR_URL ?? '').replace(/\/+$/, '')
 
-async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+/**
+ * The shared token the orchestrator asks for, sent as `X-Rakit-Token`.
+ *
+ * **This is not a secret and must not be treated as one.** Vite inlines `VITE_*` variables into
+ * the bundle at build time, so this value ships to every browser that loads the editor and can
+ * be read from the Network tab or the sources panel. It raises the cost of casual abuse of the
+ * deployed Worker — a crawler or a scanner will not have it — and does nothing at all against
+ * someone who looks.
+ *
+ * It exists so the API is not wide open before real auth ships. When auth does ship, this
+ * variable goes away rather than graduating into a credential.
+ *
+ * Empty means "send no header", which is what an orchestrator with no token configured
+ * expects. A mismatch between this and the deployment shows up as a 401 the store reports.
+ */
+const TOKEN = import.meta.env.VITE_RAKIT_TOKEN ?? ''
+
+/**
+ * Methods that require a JSON body. A bodyless GET must not send `Content-Type`, or the
+ * orchestrator's media-type check sees a declared type on a request with no body — and a
+ * `Content-Type` of `application/json` with no body is its own kind of wrong.
+ */
+type Method = 'GET' | 'POST' | 'PUT'
+
+async function request<T>(
+  method: Method,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${BASE}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal,
-    })
+    const init: RequestInit = { method, signal }
+    if (body !== undefined) {
+      init.headers = { 'Content-Type': 'application/json' }
+      init.body = JSON.stringify(body)
+    }
+    if (TOKEN !== '') {
+      // Sent on every request including GET: the orchestrator protects reads too, since a
+      // project list is no more public than the projects in it.
+      init.headers = { ...(init.headers as Record<string, string> | undefined), 'X-Rakit-Token': TOKEN }
+    }
+
+    response = await fetch(`${BASE}${path}`, init)
   } catch (cause) {
     // A caller abort is not a network fault; rethrown so the caller can tell them apart.
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
-    throw new NetworkError('Tidak dapat menghubungi server. Pastikan orchestrator berjalan.')
+
+    /**
+     * A CORS rejection surfaces here as a bare TypeError with no detail — the browser
+     * deliberately hides whether the server refused or was never reached. Saying so is the
+     * difference between "the server is down" and "the server is up but this origin is not
+     * on its allowlist", which are fixed in different places.
+     */
+    throw new NetworkError(
+      BASE === ''
+        ? 'Tidak dapat menghubungi server. Pastikan orchestrator berjalan.'
+        : `Tidak dapat menghubungi ${BASE}. Pastikan server aktif dan origin ini diizinkan (CORS).`,
+    )
   }
 
   let envelope: Envelope<T>
@@ -95,6 +149,9 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
 
   return envelope.data
 }
+
+const post = <T>(path: string, body: unknown, signal?: AbortSignal) =>
+  request<T>('POST', path, body, signal)
 
 /**
  * Validate before returning. `safeParse` rather than `parse` so the failure carries every
@@ -174,4 +231,72 @@ export async function reviseProject(
   }
 
   return { project: asProject(data.project), usage: data.usage }
+}
+
+/**
+ * Persistence, against the platform D1 database.
+ *
+ * These responses are validated with `asProject` exactly like an LLM answer. The reasoning is
+ * the same one at the top of this file and the temptation to skip it is stronger here —
+ * "the database is ours, it holds what we put there" — which is precisely why it is applied:
+ * a row written by an older version of the schema, or edited by hand with `wrangler d1
+ * execute`, is exactly as capable of breaking the preview as a bad model answer, and a crash
+ * in render is harder to trace back to its cause.
+ */
+
+/** Every stored project. Ordered by the server, newest first. */
+export async function listProjects(signal?: AbortSignal): Promise<ParsedProject[]> {
+  const data = await request<unknown>('GET', '/api/v1/projects', undefined, signal)
+
+  if (!Array.isArray(data)) {
+    throw new NetworkError('Server membalas daftar proyek dengan format tak dikenal.')
+  }
+
+  return data.map(asProject)
+}
+
+/** Load one project with its revision history. */
+export async function getProject(id: string, signal?: AbortSignal): Promise<ParsedProject> {
+  const data = await request<{ project: unknown }>(
+    'GET',
+    `/api/v1/projects/${encodeURIComponent(id)}`,
+    undefined,
+    signal,
+  )
+  return asProject(data.project)
+}
+
+/**
+ * Create a project. Used after generation, where the id is already final.
+ *
+ * Not an upsert: a second `POST` for the same id must fail loudly rather than silently
+ * overwrite, because generating twice should produce two projects, not one project that
+ * quietly replaced the other.
+ */
+export async function createProject(
+  project: ParsedProject,
+  signal?: AbortSignal,
+): Promise<ParsedProject> {
+  const data = await post<{ project: unknown }>('/api/v1/projects', project, signal)
+  return asProject(data.project)
+}
+
+/**
+ * Save a project's current tree, creating the row if it does not exist.
+ *
+ * Used by every path that mutates a project the user already has: a free inspector edit, a
+ * revision, a status change. The revision counter is bumped server-side, so `PUT` is safe to
+ * call repeatedly with the same body.
+ */
+export async function upsertProject(
+  project: ParsedProject,
+  signal?: AbortSignal,
+): Promise<ParsedProject> {
+  const data = await request<{ project: unknown }>(
+    'PUT',
+    `/api/v1/projects/${encodeURIComponent(project.id)}`,
+    project,
+    signal,
+  )
+  return asProject(data.project)
 }

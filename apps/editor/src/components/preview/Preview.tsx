@@ -293,15 +293,13 @@ function GeneratingState() {
       </span>
       <p className="text-body font-medium text-ink">Menyusun aplikasi Anda</p>
       <p className="max-w-[42ch] text-meta leading-5 text-ink-meta">
-        Koin sudah dipotong dan tercatat. Kalau proses ini gagal, koin dikembalikan otomatis dan
-        baris refund muncul di riwayat.
+        Model sedang menyusun skema dari deskripsi Anda. Proses ini biasanya butuh beberapa detik.
       </p>
     </div>
   )
 }
 
 function FailedState() {
-  const balance = useBuilder((s) => s.balance())
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2.5 px-8 text-center">
       <span className="grid h-10 w-10 place-items-center rounded-full bg-danger-bg text-danger-ink">
@@ -309,9 +307,8 @@ function FailedState() {
       </span>
       <p className="text-body font-semibold text-ink">Generate gagal</p>
       <p className="max-w-[46ch] text-meta leading-5 text-ink-body">
-        Deskripsi terlalu pendek untuk menurunkan skema. Koin sudah dikembalikan seluruhnya — saldo
-        Anda kini <span className="tnum font-mono font-semibold">{balance}</span> koin, dan baris
-        refund tercatat di riwayat.
+        Deskripsi terlalu pendek untuk menurunkan skema. Tidak ada proyek yang dibuat, dan proyek
+        Anda yang lain tidak tersentuh.
       </p>
       <p className="max-w-[46ch] text-meta leading-5 text-ink-meta">
         Coba sebutkan entitas yang ingin dicatat, misalnya &ldquo;pasien, layanan, obat, dan

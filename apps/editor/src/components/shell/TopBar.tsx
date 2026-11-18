@@ -1,11 +1,9 @@
-import { COIN_COST } from '../../lib/types'
 import { useBuilder } from '../../store/useBuilder'
 import { ActionButton, IconButton } from '../ui/Button'
 import { IconArrowUpRight, IconExternal, IconRocket, IconSliders, IconTable } from '../ui/Icons'
 
 export function TopBar() {
   const project = useBuilder((s) => s.activeProject())
-  const balance = useBuilder((s) => s.balance())
   const publish = useBuilder((s) => s.publish)
   const runPublish = useBuilder((s) => s.runPublish)
   const inspectOpen = useBuilder((s) => s.inspectOpen)
@@ -13,7 +11,6 @@ export function TopBar() {
   const setView = useBuilder((s) => s.setView)
 
   const publishing = publish.state === 'running'
-  const canAfford = balance >= COIN_COST.publish
   const live = project.status === 'live'
 
   return (
@@ -73,14 +70,9 @@ export function TopBar() {
               variant="primary"
               size="sm"
               icon={<IconRocket className="h-3.5 w-3.5" />}
-              onClick={runPublish}
-              disabled={publishing || !canAfford}
-              cost={COIN_COST.publish}
-              title={
-                canAfford
-                  ? `Terbitkan ulang · −${COIN_COST.publish} koin`
-                  : `Butuh ${COIN_COST.publish} koin, saldo Anda ${balance}`
-              }
+              onClick={() => void runPublish()}
+              disabled={publishing}
+              title="Terbitkan ulang versi terbaru"
             >
               {publishing ? 'Menerbitkan…' : 'Terbitkan ulang'}
             </ActionButton>
@@ -90,14 +82,9 @@ export function TopBar() {
             variant="primary"
             size="sm"
             icon={<IconRocket className="h-3.5 w-3.5" />}
-            onClick={runPublish}
-            disabled={publishing || !canAfford}
-            cost={COIN_COST.publish}
-            title={
-              canAfford
-                ? `Terbitkan ke Cloudflare · −${COIN_COST.publish} koin`
-                : `Butuh ${COIN_COST.publish} koin, saldo Anda ${balance}`
-            }
+            onClick={() => void runPublish()}
+            disabled={publishing}
+            title="Terbitkan ke Cloudflare"
           >
             {publishing ? 'Menerbitkan…' : 'Terbitkan'}
           </ActionButton>

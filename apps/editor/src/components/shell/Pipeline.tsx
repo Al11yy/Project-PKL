@@ -19,7 +19,7 @@ export function Pipeline() {
     'deskripsi diterima',
     `${project.tablesCount} tabel`,
     `${project.screensCount} layar`,
-    'gratis · tanpa koin',
+    'tersimpan',
     published ? 'aktif' : 'belum',
   ]
 

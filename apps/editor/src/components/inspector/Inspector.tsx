@@ -16,9 +16,10 @@ const ACCENTS: { id: 'default' | Accent; label: string; swatch: string }[] = [
 ]
 
 /**
- * The free path, stated as such on the panel itself. It edits the local JSON
- * node tree, so it never reaches the ledger: whatever this panel does, the
- * balance above is unchanged, and saying so is the point.
+ * Direct editing, stated as such on the panel itself. It costs nothing and calls
+ * no model — it patches the node tree in place and saves the result, so it works
+ * even when the provider is unreachable. That is what makes it the escape hatch
+ * when a prompt fails.
  */
 export function Inspector() {
   const open = useBuilder((s) => s.inspectOpen)
@@ -54,8 +55,9 @@ export function Inspector() {
 
       <div className="border-b border-rule bg-ok-bg px-4 py-2.5">
         <p className="text-meta leading-5 text-ok-ink">
-          <span className="font-semibold">0 koin.</span> Semua perubahan di panel ini gratis —
-          diedit langsung di pohon data, tanpa memanggil AI.
+          <span className="font-semibold">Tanpa AI.</span> Perubahan di panel ini langsung
+          diterapkan ke pohon data dan disimpan, jadi tetap bekerja saat model tidak dapat
+          dihubungi.
         </p>
       </div>
 

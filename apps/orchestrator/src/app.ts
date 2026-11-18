@@ -3,6 +3,7 @@ import { createRouter } from './routes/index'
 import { toApiError } from './errors'
 import { logger } from './logger'
 import { requestId } from './ids'
+import { allowedOrigins, isOriginAllowed } from './config'
 import type { LlmClient } from './llm/client'
 import type { Env } from './config'
 
@@ -20,6 +21,61 @@ const BODY_LIMIT_BYTES = 32 * 1024
  */
 export function createApp(client: LlmClient, timeoutMs?: number): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>()
+
+  /**
+   * CORS, first, before anything that could fail.
+   *
+   * This has to be the outermost middleware for two reasons. A browser sends the preflight
+   * `OPTIONS` *instead of* the real request, so a preflight that reaches a handler depending on
+   * configuration fails before it can ever answer — which is exactly what happened when this
+   * Worker was first deployed without an API key: `OPTIONS` returned 500 and the browser
+   * reported it to the user as a network error with no explanation.
+   *
+   * And the CORS decision itself must not depend on the LLM being configured. Whether an
+   * origin may talk to this API and whether the API can talk to its provider are unrelated
+   * questions; coupling them means a missing key presents as a broken frontend.
+   *
+   * `Allow-Credentials` is deliberately absent. Nothing here is cookie-authenticated, and
+   * sending it while reflecting an origin is how an allowlist quietly becomes a wildcard.
+   */
+  app.use('*', async (c, next) => {
+    const origin = c.req.header('origin')
+    const allowed = allowedOrigins(c.env ?? {})
+    const permitted = origin !== undefined && isOriginAllowed(origin, allowed)
+
+    if (origin !== undefined && !permitted) {
+      /**
+       * A disallowed origin is logged, not silently dropped. During setup the failure is almost
+       * always a typo in `CORS_ALLOWED_ORIGINS` or a forgotten Pages domain, and without this
+       * line the symptom is an unexplained browser error.
+       */
+      logger.warn('cors.rejected', { origin })
+    }
+
+    if (permitted) {
+      c.header('Access-Control-Allow-Origin', origin)
+      // The response varies by origin, so a cache must not serve one origin's response to
+      // another. Without this a CDN can hand a permitted origin's CORS headers to everyone.
+      c.header('Vary', 'Origin')
+    }
+
+    // Preflight ends here, with no handler and no configuration involved.
+    if (c.req.method === 'OPTIONS') {
+      if (permitted) {
+        c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+        /**
+         * `X-Rakit-Token` must be listed, or the browser refuses to send the real request and
+         * the failure looks like a CORS bug rather than a missing header declaration. The list
+         * is exact — a wildcard is not an option while `Allow-Credentials` is absent.
+         */
+        c.header('Access-Control-Allow-Headers', 'Content-Type, X-Rakit-Token')
+        c.header('Access-Control-Max-Age', '86400')
+      }
+      return c.body(null, 204)
+    }
+
+    await next()
+  })
 
   /**
    * Reject a non-JSON Content-Type before the parser sees it.

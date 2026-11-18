@@ -1,5 +1,4 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
-import { IconCoins } from './Icons'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 type Size = 'sm' | 'md'
@@ -26,21 +25,22 @@ interface BaseProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 /**
- * A priced action. The cost rides inside the button, on the same baseline as
- * the verb, so nobody can spend without having read the price. A free cost
- * renders as an explicit "gratis" rather than an absent badge: silence would
- * be indistinguishable from an unpriced action.
+ * The app's action button.
+ *
+ * It used to take a `cost` and render a coin badge beside the verb, because
+ * spending was the thing a user had to be warned about. There are no coins, so
+ * the prop is gone rather than left defaulted — a `cost` that renders nothing
+ * would be a trap for the next person who passes one expecting it to mean
+ * something.
  */
 export function ActionButton({
-  cost,
   children,
   variant = 'secondary',
   size = 'md',
   icon,
   className = '',
   ...rest
-}: BaseProps & { cost?: number }) {
-  const priced = typeof cost === 'number'
+}: BaseProps) {
   return (
     <button
       {...rest}
@@ -48,20 +48,6 @@ export function ActionButton({
     >
       {icon}
       <span>{children}</span>
-      {priced && (
-        <span
-          className={`tnum ml-1 inline-flex items-center gap-1 rounded border px-1.5 py-px font-mono text-[11.5px] leading-4 ${
-            variant === 'primary'
-              ? 'border-white/35 bg-white/15 text-white'
-              : cost === 0
-                ? 'border-ok-ink/25 bg-ok-bg text-ok-ink'
-                : 'border-rule bg-ground-sunken text-ink-muted'
-          }`}
-        >
-          {cost !== 0 && <IconCoins className="h-3 w-3" />}
-          {cost === 0 ? 'gratis' : `−${cost}`}
-        </span>
-      )}
     </button>
   )
 }

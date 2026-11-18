@@ -33,8 +33,39 @@ database_id = "0a8f0b2e-1949-4388-9c8b-3567a3f33120"
 
 # Non-secret configuration. Secrets go in `wrangler secret`, never here.
 [vars]
-LLM_KITA_BASE_URL = "https://llm-kita.com"
-LLM_KITA_MODEL = "kita-default"
+# Generation is OFF in the deployed Worker until Auth exists.
+#
+# Written out rather than left absent so the safe state is greppable: an operator reading this
+# file should not have to know the default to know whether the paid endpoints are reachable.
+# While this is "false", `/generate` and `/revise` answer 503 FEATURE_DISABLED, and only the
+# exact string "true" enables them.
+#
+# Enabling this exposes an endpoint that spends LLM-Kita quota to anyone who calls it —
+# `RAKIT_SHARED_TOKEN` is inlined into the editor's browser bundle, so it stops crawlers and
+# nothing else. Flip it for a deliberate test and set it back.
+FEATURE_GENERATE_ENABLED = "false"
+# The API lives on its own host, under `/api/v1` — NOT on the marketing site at
+# `https://llm-kita.com`, which answers every POST with 405 because it serves static HTML.
+# The client appends `/chat/completions` to this value, so the `/v1` must stay here and must
+# not be repeated in code.
+LLM_KITA_BASE_URL = "https://api.llm-kita.com/api/v1"
+# `auto` lets the gateway pick the model. The earlier `kita-default` was invented during setup
+# and was never a real model id.
+LLM_KITA_MODEL = "auto"
 LLM_TIMEOUT_MS = "60000"
 LLM_MAX_TOKENS_GENERATE = "8000"
 LLM_MAX_TOKENS_REVISE = "12000"
+
+# Browser origins allowed to call this API.
+#
+# CORS is a browser rule, not an access control: `curl` ignores it entirely, so this list stops
+# a page on another origin from calling the API with a user's browser — it does not stop anyone
+# else. The controls that do are the shared token and FEATURE_GENERATE_ENABLED above.
+#
+# Still an allowlist rather than a wildcard, and an empty value denies every browser origin.
+# Never replace this with `*` to "make it work": that lets any page on the internet drive the
+# deployed Worker and bill the LLM-Kita account behind it.
+#
+# `*.pages.dev` subdomains are the Cloudflare Pages preview URLs, which change on every deploy;
+# the wildcard keeps previews working. Add the custom domain here when one exists.
+CORS_ALLOWED_ORIGINS = "http://localhost:5180,http://127.0.0.1:5180,*.rakit-editor.pages.dev"

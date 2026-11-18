@@ -77,6 +77,60 @@ export const internalError = () =>
     message: 'Terjadi kesalahan tak terduga.',
   })
 
+export const notFound = (what: string) =>
+  new ApiErrorException(404, {
+    code: 'NOT_FOUND',
+    message: `${what} tidak ditemukan.`,
+  })
+
+/**
+ * A write that lost a race: the row exists, but at a revision the caller did not expect.
+ *
+ * 409 rather than 400, because the request was well-formed and would have succeeded a moment
+ * earlier. The client's remedy is to reload and reapply, which is a different action from
+ * fixing a bad payload.
+ */
+export const conflict = (code: string, message: string, details?: unknown) =>
+  new ApiErrorException(409, { code, message, details })
+
+/**
+ * The platform database is unavailable: no binding, or a query that failed.
+ *
+ * 503 rather than 500. A missing binding is a deployment fault, not a bug in the request, and
+ * separating it means an operator reading logs can tell "D1 is not bound" from "we threw".
+ */
+export const databaseUnavailable = (detail: string) =>
+  new ApiErrorException(503, {
+    code: 'DATABASE_UNAVAILABLE',
+    message: detail,
+  })
+
+/**
+ * The caller did not present the shared token this deployment requires.
+ *
+ * 401, and the message deliberately says nothing about whether the token was absent or wrong.
+ * Distinguishing the two would tell a prober that a token is configured here, and narrowing
+ * the guess reduces the work left to do.
+ */
+export const unauthorized = () =>
+  new ApiErrorException(401, {
+    code: 'UNAUTHORIZED',
+    message: 'Permintaan ini memerlukan token akses yang valid.',
+  })
+
+/**
+ * A capability that exists in the code but is switched off in this deployment.
+ *
+ * 503 rather than 403 or 404. 403 would imply the caller could fix it by authenticating, and
+ * 404 would imply the endpoint is not there — both invite retries that cannot succeed. This
+ * says the server is not currently offering the feature, which is the truth.
+ */
+export const featureDisabled = (feature: string) =>
+  new ApiErrorException(503, {
+    code: 'FEATURE_DISABLED',
+    message: `Fitur "${feature}" sedang tidak diaktifkan pada deployment ini.`,
+  })
+
 /**
  * Fold a thrown error into the envelope.
  *

@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { COIN_COST } from '../../lib/types'
 import { useBuilder } from '../../store/useBuilder'
 import { ActionButton } from '../ui/Button'
 import { IconSliders, IconWand } from '../ui/Icons'
@@ -11,12 +10,9 @@ export function PromptRow() {
   const runGeneration = useBuilder((s) => s.runGeneration)
   const runRevision = useBuilder((s) => s.runRevision)
   const toggleInspect = useBuilder((s) => s.toggleInspect)
-  const balance = useBuilder((s) => s.balance())
   const [text, setText] = useState('')
 
   const busy = generation.state === 'running' || revision.state === 'running'
-  const canRevise = balance >= COIN_COST.revise
-  const canAfford = balance >= COIN_COST.generate
 
   return (
     <section className="shrink-0 border-b border-rule bg-ground px-5 py-3.5" aria-label="Prompt">
@@ -36,37 +32,28 @@ export function PromptRow() {
           />
         </div>
         <div className="mt-0.5 flex shrink-0 flex-col gap-1.5">
-          {/* Two prompts, two prices, side by side: a full rebuild and a
-              targeted revision are different purchases and must not share a
-              button. */}
+          {/* Two prompts, two different operations, side by side: generating makes a new
+              project and revising changes this one. They must not share a button. */}
           <ActionButton
             variant="primary"
             // `void`: the action handles its own failures and reports them as toasts, so
             // there is no rejection left to await. Marked explicitly rather than left as a
             // floating promise, which would read as a forgotten await.
             onClick={() => void runGeneration(text || project.prompt)}
-            disabled={busy || !canAfford}
-            cost={COIN_COST.generate}
+            disabled={busy}
             icon={<IconWand className="h-3.5 w-3.5" />}
-            title={
-              canAfford
-                ? `Generate PRD & UI · −${COIN_COST.generate} koin`
-                : `Butuh ${COIN_COST.generate} koin, saldo Anda ${balance}`
-            }
+            title="Buat proyek baru dari deskripsi ini"
           >
             {generation.state === 'running' ? 'Memproses…' : 'Generate PRD & UI'}
           </ActionButton>
           <ActionButton
             variant="secondary"
             onClick={() => void runRevision(text)}
-            disabled={busy || !text.trim() || !canRevise}
-            cost={COIN_COST.revise}
+            disabled={busy || !text.trim()}
             title={
-              !text.trim()
-                ? 'Tulis dulu perubahan yang diinginkan di kolom prompt'
-                : canRevise
-                  ? `Revisi terarah · −${COIN_COST.revise} koin`
-                  : `Butuh ${COIN_COST.revise} koin, saldo Anda ${balance}`
+              text.trim()
+                ? 'Terapkan perubahan ini ke proyek yang sedang dibuka'
+                : 'Tulis dulu perubahan yang diinginkan di kolom prompt'
             }
           >
             {revision.state === 'running' ? 'Menerapkan…' : 'Revisi lewat prompt'}
@@ -81,10 +68,9 @@ export function PromptRow() {
           className="press inline-flex items-center gap-1 font-medium text-ok-ink underline decoration-ok-ink/40 underline-offset-2 hover:decoration-ok-ink"
         >
           <IconSliders className="h-3 w-3" />
-          gratis 0 koin
+          lewat panel kanan
         </button>
-        . Prompt di atas untuk membuat ulang PRD &amp; UI ({COIN_COST.generate} koin) atau revisi
-        terarah ({COIN_COST.revise} koin).
+        . Generate membuat proyek baru; revisi mengubah proyek yang sedang dibuka.
       </p>
     </section>
   )

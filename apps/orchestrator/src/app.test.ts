@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { projectSchema } from '@rakit/schema'
 import { createApp } from './app'
+import { fakeD1 } from './testing/fake-d1'
+import { currentRevision } from './repositories/projects'
 import { LlmAuthError, LlmProviderError, LlmRateLimitError, LlmTimeoutError } from './llm/errors'
 import type { LlmClient } from './llm/client'
 import type { Env } from './config'
@@ -30,7 +32,9 @@ const PROMPT = 'sistem kasir untuk klinik'
  * version wrote and deleted `process.env.LLM_KITA_API_KEY`, which leaked between tests if one
  * of them threw first.
  */
-const ENV: Env = { LLM_KITA_API_KEY: 'test-key' }
+// `FEATURE_GENERATE_ENABLED` is set explicitly because it defaults to off. These tests are
+// about generation behaviour, so they have to opt in the same way a deployment does.
+const ENV: Env = { LLM_KITA_API_KEY: 'test-key', FEATURE_GENERATE_ENABLED: 'true' }
 
 const app = (client: LlmClient) => createApp(client)
 
@@ -496,7 +500,7 @@ describe('envelope discipline', () => {
 
     const response = await post(app(failingClient(new LlmAuthError())), '/api/v1/generate', {
       prompt: PROMPT,
-    }, { LLM_KITA_API_KEY: sentinel })
+    }, { LLM_KITA_API_KEY: sentinel, FEATURE_GENERATE_ENABLED: 'true' })
 
     expect(JSON.stringify(response.body)).not.toContain(sentinel)
   })
@@ -525,3 +529,117 @@ describe('envelope discipline', () => {
 function failingClient(error: Error): LlmClient {
   return new ScriptedLlmClient(() => Promise.reject(error))
 }
+
+/**
+ * Persistence over HTTP.
+ *
+ * The repository tests prove the queries; these prove the route contract around them — status
+ * codes, the envelope, and the id-mismatch guard that keeps a request from writing a project
+ * under an id it does not carry.
+ */
+describe('projects over HTTP', () => {
+  const withDb = (client = clientReturning(validProjectJson())) => {
+    const db = fakeD1()
+    return { app: createApp(client), db }
+  }
+
+  const call = (
+    instance: ReturnType<typeof createApp>,
+    method: string,
+    path: string,
+    body?: unknown,
+    env: Env = { ...ENV, DB: fakeD1() },
+  ) =>
+    instance.fetch(
+      new Request(`http://localhost${path}`, {
+        method,
+        ...(body === undefined
+          ? {}
+          : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+      }),
+      env,
+    )
+
+  it('creates a project and returns 201 with the stored form', async () => {
+    const { app: instance, db } = withDb()
+    const env = { ...ENV, DB: db }
+    const project = clientProject({ id: 'p-http-1' })
+
+    const response = await call(instance, 'POST', '/api/v1/projects', project, env)
+    const body = (await response.json()) as any
+
+    expect(response.status).toBe(201)
+    expect(body.error).toBeNull()
+    expect(body.data.project.id).toBe('p-http-1')
+    expect(projectSchema.safeParse(body.data.project).success).toBe(true)
+  })
+
+  it('lists projects', async () => {
+    const { app: instance, db } = withDb()
+    const env = { ...ENV, DB: db }
+
+    await call(instance, 'POST', '/api/v1/projects', clientProject({ id: 'p-list-1' }), env)
+    const response = await call(instance, 'GET', '/api/v1/projects', undefined, env)
+    const body = (await response.json()) as any
+
+    expect(response.status).toBe(200)
+    expect(body.data).toHaveLength(1)
+    expect(body.data[0].id).toBe('p-list-1')
+  })
+
+  it('rejects a path id that disagrees with the body id', async () => {
+    /**
+     * Without this guard, `PUT /projects/a` with a body naming `b` would write `b` — a request
+     * silently modifying a different project than the one it addressed.
+     */
+    const { app: instance, db } = withDb()
+    const response = await call(
+      instance,
+      'PUT',
+      '/api/v1/projects/p-path',
+      clientProject({ id: 'p-body' }),
+      { ...ENV, DB: db },
+    )
+
+    expect(response.status).toBe(400)
+    expect(((await response.json()) as any).error.code).toBe('ID_MISMATCH')
+  })
+
+  it('upserts on PUT and bumps the revision', async () => {
+    const { app: instance, db } = withDb()
+    const env = { ...ENV, DB: db }
+    const project = clientProject({ id: 'p-put' })
+
+    await call(instance, 'PUT', '/api/v1/projects/p-put', project, env)
+    const second = await call(instance, 'PUT', '/api/v1/projects/p-put', project, env)
+
+    expect(second.status).toBe(200)
+    expect(((await second.json()) as any).data.project.id).toBe('p-put')
+    expect(await currentRevision(db, 'p-put')).toBe(2)
+  })
+
+  it('returns 503 DATABASE_UNAVAILABLE when the binding is missing', async () => {
+    // The failure a misconfigured wrangler.toml actually produces. It must name itself rather
+    // than surface as a generic 500 from a TypeError on the first `.prepare`.
+    const response = await call(createApp(clientReturning(validProjectJson())), 'GET', '/api/v1/projects', undefined, ENV)
+
+    expect(response.status).toBe(503)
+    expect(((await response.json()) as any).error.code).toBe('DATABASE_UNAVAILABLE')
+  })
+
+  it('returns 404 for a missing project', async () => {
+    const { app: instance, db } = withDb()
+    const response = await call(instance, 'GET', '/api/v1/projects/p-nope', undefined, { ...ENV, DB: db })
+
+    expect(response.status).toBe(404)
+    expect(((await response.json()) as any).error.code).toBe('NOT_FOUND')
+  })
+
+  it('rejects a project body that violates the contract', async () => {
+    const { app: instance, db } = withDb()
+    const response = await call(instance, 'POST', '/api/v1/projects', { name: 'tanpa id' }, { ...ENV, DB: db })
+
+    expect(response.status).toBe(400)
+    expect(((await response.json()) as any).error.code).toBe('INVALID_REQUEST')
+  })
+})
