@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useBuilder, type View } from '../../store/useBuilder'
-import { IconLayers, IconPlus, IconTable } from '../ui/Icons'
+import { IconLayers, IconPlus, IconTable, IconTrash } from '../ui/Icons'
 
 const NAV: { id: View; label: string; icon: ReactNode }[] = [
   { id: 'builder', label: 'Editor', icon: <IconLayers /> },
@@ -13,6 +13,21 @@ export function Rail() {
   const view = useBuilder((s) => s.view)
   const setView = useBuilder((s) => s.setView)
   const setActive = useBuilder((s) => s.setActive)
+  const createBlankProject = useBuilder((s) => s.createBlankProject)
+  const deleteProject = useBuilder((s) => s.deleteProject)
+
+  /**
+   * Local rather than the store's `saving`: that flag belongs to the block autosave and is
+   * raised on every keystroke in the inspector. Sharing it would make this button flicker
+   * while the user edits something unrelated.
+   */
+  const [creating, setCreating] = useState(false)
+
+  /**
+   * Which row's delete is in flight, so only that row dims. A single boolean would grey out
+   * every row's control and imply the whole rail is busy when one project is being removed.
+   */
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const loaded = useBuilder((s) => s.loaded)
   const loading = useBuilder((s) => s.loading)
@@ -61,33 +76,72 @@ export function Rail() {
         {projects.map((p) => {
           const on = p.id === activeId
           return (
-            <button
-              key={p.id}
-              onClick={() => setActive(p.id)}
-              aria-current={on ? 'true' : undefined}
-              className={`press mb-0.5 flex w-full flex-col gap-1 rounded-md border px-2.5 py-2 text-left ${
-                on
-                  ? 'border-rule-strong bg-ground shadow-[0_1px_2px_rgba(17,24,39,0.06)]'
-                  : 'border-transparent hover:bg-ground-sunken'
-              }`}
-            >
-              <span className="flex items-center gap-1.5">
-                <span className="truncate text-body font-medium text-ink">{p.name}</span>
-                {p.status === 'live' && (
-                  <span className="shrink-0 rounded bg-ok-bg px-1.5 py-px text-[11px] font-semibold text-ok-ink">
-                    Terbit
-                  </span>
-                )}
-              </span>
-              <span className="tnum font-mono text-[11.5px] text-ink-meta">
-                {p.tablesCount} tabel · {p.screensCount} layar
-              </span>
-            </button>
+            /**
+             * A wrapper, not one button: the delete control cannot live inside the select
+             * button (nested buttons are invalid HTML and the inner one swallows the outer
+             * click). The row's own button fills it, and the delete sits on top — visible on
+             * hover and on focus, so it is reachable by keyboard without hiding the name.
+             */
+            <div key={p.id} className="group relative mb-0.5">
+              <button
+                onClick={() => setActive(p.id)}
+                aria-current={on ? 'true' : undefined}
+                className={`press flex w-full flex-col gap-1 rounded-md border px-2.5 py-2 pr-8 text-left ${
+                  on
+                    ? 'border-rule-strong bg-ground shadow-[0_1px_2px_rgba(17,24,39,0.06)]'
+                    : 'border-transparent hover:bg-ground-sunken'
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span className="truncate text-body font-medium text-ink">{p.name}</span>
+                  {p.status === 'live' && (
+                    <span className="shrink-0 rounded bg-ok-bg px-1.5 py-px text-[11px] font-semibold text-ok-ink">
+                      Terbit
+                    </span>
+                  )}
+                </span>
+                <span className="tnum font-mono text-[11.5px] text-ink-meta">
+                  {p.tablesCount} tabel · {p.screensCount} layar
+                </span>
+              </button>
+
+              <button
+                onClick={() => {
+                  // A native confirm rather than a custom modal: deleting a project is not
+                  // undoable, and the cheapest guard that a mis-click cannot pass is the one
+                  // the browser draws for free. It blocks, which is the point.
+                  if (!window.confirm(`Hapus proyek "${p.name}"? Tindakan ini tidak bisa dibatalkan.`)) {
+                    return
+                  }
+                  setDeletingId(p.id)
+                  // `finally` rather than the success path: a failed delete leaves the row in
+                  // place, and its button must come back so the user can retry.
+                  void deleteProject(p.id).finally(() => setDeletingId(null))
+                }}
+                disabled={deletingId === p.id}
+                aria-label={`Hapus proyek ${p.name}`}
+                title="Hapus proyek"
+                className="press absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-ink-meta opacity-0 hover:bg-danger-bg hover:text-danger-ink focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-40"
+              >
+                <IconTrash className="h-3.5 w-3.5" />
+              </button>
+            </div>
           )
         })}
-        <button className="press mt-1 flex w-full items-center gap-2 rounded-md border border-dashed border-rule-strong px-2.5 py-2 text-meta font-medium text-ink-muted hover:border-ink-meta hover:text-ink">
+        <button
+          onClick={async () => {
+            setCreating(true)
+            try {
+              await createBlankProject()
+            } finally {
+              setCreating(false)
+            }
+          }}
+          disabled={creating}
+          className="press mt-1 flex w-full items-center gap-2 rounded-md border border-dashed border-rule-strong px-2.5 py-2 text-meta font-medium text-ink-muted hover:border-ink-meta hover:text-ink disabled:opacity-60"
+        >
           <IconPlus className="h-3.5 w-3.5" />
-          Proyek baru
+          {creating ? 'Membuat…' : 'Proyek baru'}
         </button>
       </div>
 

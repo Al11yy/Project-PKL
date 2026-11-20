@@ -4,6 +4,10 @@ import { IconTable } from '../ui/Icons'
 export function SchemaView() {
   const project = useBuilder((s) => s.activeProject())
 
+  // A schema belongs to a project; with none there is nothing to describe. `App` shows the
+  // empty state in that case rather than this view.
+  if (project === undefined) return null
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-5">
       <div className="mb-4 flex items-baseline justify-between">

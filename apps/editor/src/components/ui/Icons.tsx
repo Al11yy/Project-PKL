@@ -98,6 +98,14 @@ export const IconExternal = ({ className }: Props) => (
   </svg>
 )
 
+export const IconTrash = ({ className }: Props) => (
+  <svg {...base(className)}>
+    <path d="M2.8 4.4h10.4M6.4 4.4V3.2a.8.8 0 0 1 .8-.8h1.6a.8.8 0 0 1 .8.8v1.2" />
+    <path d="M4.2 4.4v8.2a1.2 1.2 0 0 0 1.2 1.2h5.2a1.2 1.2 0 0 0 1.2-1.2V4.4" />
+    <path d="M6.8 7v4M9.2 7v4" />
+  </svg>
+)
+
 export const IconChevronDown = ({ className }: Props) => (
   <svg {...base(className)}>
     <path d="M4.4 6.4 8 10l3.6-3.6" />

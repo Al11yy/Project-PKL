@@ -84,47 +84,21 @@ const TOKEN = import.meta.env.VITE_RAKIT_TOKEN ?? ''
 /**
  * Methods that require a JSON body. A bodyless GET must not send `Content-Type`, or the
  * orchestrator's media-type check sees a declared type on a request with no body — and a
- * `Content-Type` of `application/json` with no body is its own kind of wrong.
+ * `Content-Type` of `application/json` with no body is its own kind of wrong. `DELETE` is the
+ * other bodyless method: the orchestrator skips that check for it for exactly this reason.
  */
-type Method = 'GET' | 'POST' | 'PUT'
+type Method = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
-async function request<T>(
-  method: Method,
-  path: string,
-  body?: unknown,
-  signal?: AbortSignal,
-): Promise<T> {
-  let response: Response
-  try {
-    const init: RequestInit = { method, signal }
-    if (body !== undefined) {
-      init.headers = { 'Content-Type': 'application/json' }
-      init.body = JSON.stringify(body)
-    }
-    if (TOKEN !== '') {
-      // Sent on every request including GET: the orchestrator protects reads too, since a
-      // project list is no more public than the projects in it.
-      init.headers = { ...(init.headers as Record<string, string> | undefined), 'X-Rakit-Token': TOKEN }
-    }
-
-    response = await fetch(`${BASE}${path}`, init)
-  } catch (cause) {
-    // A caller abort is not a network fault; rethrown so the caller can tell them apart.
-    if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
-
-    /**
-     * A CORS rejection surfaces here as a bare TypeError with no detail — the browser
-     * deliberately hides whether the server refused or was never reached. Saying so is the
-     * difference between "the server is down" and "the server is up but this origin is not
-     * on its allowlist", which are fixed in different places.
-     */
-    throw new NetworkError(
-      BASE === ''
-        ? 'Tidak dapat menghubungi server. Pastikan orchestrator berjalan.'
-        : `Tidak dapat menghubungi ${BASE}. Pastikan server aktif dan origin ini diizinkan (CORS).`,
-    )
-  }
-
+/**
+ * Turn a response into `T`, or throw the failure it describes.
+ *
+ * Shared by `request` and by `deleteProject`, which cannot use `request` because its success
+ * path has no body at all: the orchestrator answers `204 No Content`, and `response.json()`
+ * on an empty body throws. That is the whole reason this is a separate function rather than a
+ * line inside `request` — a delete that parsed its own success as a failure would report every
+ * successful delete as a network error.
+ */
+async function readEnvelope<T>(response: Response): Promise<T> {
   let envelope: Envelope<T>
   try {
     envelope = (await response.json()) as Envelope<T>
@@ -148,6 +122,56 @@ async function request<T>(
   }
 
   return envelope.data
+}
+
+/**
+ * The failure for "no answer at all".
+ *
+ * A CORS rejection surfaces as a bare TypeError with no detail — the browser deliberately hides
+ * whether the server refused or was never reached. Saying so is the difference between "the
+ * server is down" and "the server is up but this origin is not on its allowlist", which are
+ * fixed in different places. Shared so a delete and a save cannot describe the same outage
+ * differently.
+ */
+function networkFailure(): NetworkError {
+  return new NetworkError(
+    BASE === ''
+      ? 'Tidak dapat menghubungi server. Pastikan orchestrator berjalan.'
+      : `Tidak dapat menghubungi ${BASE}. Pastikan server aktif dan origin ini diizinkan (CORS).`,
+  )
+}
+
+/** Build the request once, so every method sends the same headers for the same reasons. */
+function initFor(method: Method, body?: unknown, signal?: AbortSignal): RequestInit {
+  const init: RequestInit = { method, signal }
+  if (body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' }
+    init.body = JSON.stringify(body)
+  }
+  if (TOKEN !== '') {
+    // Sent on every request including GET: the orchestrator protects reads too, since a
+    // project list is no more public than the projects in it.
+    init.headers = { ...(init.headers as Record<string, string> | undefined), 'X-Rakit-Token': TOKEN }
+  }
+  return init
+}
+
+async function request<T>(
+  method: Method,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(`${BASE}${path}`, initFor(method, body, signal))
+  } catch (cause) {
+    // A caller abort is not a network fault; rethrown so the caller can tell them apart.
+    if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    throw networkFailure()
+  }
+
+  return readEnvelope<T>(response)
 }
 
 const post = <T>(path: string, body: unknown, signal?: AbortSignal) =>
@@ -299,4 +323,46 @@ export async function upsertProject(
     signal,
   )
   return asProject(data.project)
+}
+
+/**
+ * Delete a project and its revision history.
+ *
+ * The one call whose success has no payload: the orchestrator answers `204 No Content`, so
+ * there is nothing to parse and nothing to validate — a 2xx *is* the result. A `4xx`/`5xx`
+ * still carries the usual error envelope and is forwarded as an `ApiError`, which is why this
+ * reads one on failure but not on success.
+ *
+ * The server treats "no such project" as success, so this resolves for a project someone else
+ * already removed. That is deliberate: the caller's goal is for it to be gone, and it is.
+ */
+export async function deleteProject(id: string, signal?: AbortSignal): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(
+      `${BASE}/api/v1/projects/${encodeURIComponent(id)}`,
+      initFor('DELETE', undefined, signal),
+    )
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    throw networkFailure()
+  }
+
+  if (response.ok) return
+
+  // Not `readEnvelope`: it throws on `data: null`, and a delete's failure body is shaped like
+  // any other error, so only the `error` half is read here.
+  let envelope: Envelope<null>
+  try {
+    envelope = (await response.json()) as Envelope<null>
+  } catch {
+    throw new NetworkError(`Server membalas dengan format tak dikenal (HTTP ${response.status}).`)
+  }
+
+  throw new ApiError(
+    envelope.error?.code ?? 'DELETE_FAILED',
+    envelope.error?.message ?? `Proyek tidak dapat dihapus (HTTP ${response.status}).`,
+    response.status,
+    envelope.error?.details,
+  )
 }

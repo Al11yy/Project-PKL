@@ -12,6 +12,10 @@ export function PromptRow() {
   const toggleInspect = useBuilder((s) => s.toggleInspect)
   const [text, setText] = useState('')
 
+  // This row revises the active project, so it needs one. With none, `App` shows the empty
+  // state, whose own prompt box covers the first project instead.
+  if (project === undefined) return null
+
   const busy = generation.state === 'running' || revision.state === 'running'
 
   return (

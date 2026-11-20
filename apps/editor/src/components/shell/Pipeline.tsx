@@ -11,6 +11,9 @@ export function Pipeline() {
   const project = useBuilder((s) => s.activeProject())
   const publish = useBuilder((s) => s.publish)
 
+  // The pipeline narrates a project that exists. With none, `App` shows the empty state.
+  if (project === undefined) return null
+
   const running = generation.state === 'running'
   const done = generation.state === 'done'
   const published = project.status === 'live' || publish.state === 'done'

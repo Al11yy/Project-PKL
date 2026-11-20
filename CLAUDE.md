@@ -72,7 +72,7 @@ code run on both runtimes without a `nodejs_compat` polyfill.
 
 | What is built | Evidence |
 |---------------|----------|
-| Editor UI, 4 views (editor / skema / riwayat) | `apps/editor/src/components/` |
+| Editor UI, 2 views (editor / skema) + zero-project empty state | `apps/editor/src/components/`, `src/components/views/EmptyState.tsx` |
 | Component whitelist + Zod contract | `packages/schema/src/contract.ts` |
 | Orchestrator HTTP surface (Hono) | `apps/orchestrator/src/routes/` |
 | LLM provider seam (OpenAI-compatible) | `apps/orchestrator/src/llm/` |
@@ -81,7 +81,7 @@ code run on both runtimes without a `nodejs_compat` polyfill.
 | D1 project repository (CRUD + revisions) | `apps/orchestrator/src/repositories/projects.ts` |
 | Editor persistence (load on mount, save on edit) | `apps/editor/src/store/useBuilder.ts` |
 | CORS allowlist, enforced at the worker entry | `apps/orchestrator/src/cors.test.ts`, `src/worker.test.ts` |
-| Unit tests (237 across 14 files) | `**/*.test.ts` |
+| Unit tests (262 across 16 files) | `**/*.test.ts` |
 
 | What is NOT built | Consequence |
 |-------------------|-------------|
@@ -155,9 +155,9 @@ Read `.amanah/atlas/*.md` before planning or modifying any feature:
 - `conventions.md` — naming, gotchas, security non-negotiables
 - `quickstart.md` — copy-paste recipes for common tasks
 
-They were last regenerated from code on **2026-07-15**, so they predate the orchestrator
-and the schema package. Where an atlas file and the code disagree, **the code wins** — then
-fix the atlas. `/atlas` regenerates all five; it is overdue.
+They were last regenerated from code on **2026-11-18**, covering the orchestrator, the
+schema package, and the deferred-billing position. Where an atlas file and the code
+disagree, **the code wins** — then fix the atlas. `/atlas` regenerates all five.
 
 ## Feature Blueprints
 
@@ -209,7 +209,7 @@ Requires `CONFLUENCE_BASE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_API_TOKEN`, and
 ## Setup status
 
 - Commands: installed in `.claude/commands/`
-- Atlas: generated in `.amanah/atlas/`, **stale** (see above)
+- Atlas: regenerated from code on 2026-11-18 in `.amanah/atlas/`
 - Skills/agents: includes the `impeccable` skill and its 4 agents under `.claude/`. The
   Amanah framework sources live in `.amanah/SKILL.md`, `.amanah/atlas-generator/SKILL.md`,
   and `.amanah/AGENT.md`; read them directly if the corresponding skill is not installed.

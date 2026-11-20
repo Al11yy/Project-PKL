@@ -234,4 +234,37 @@ describe('deleteProject', () => {
     expect(db.rows).toHaveLength(0)
     await expect(getProject(db, 'p-del')).rejects.toMatchObject({ httpStatus: 404 })
   })
+
+  /**
+   * Regression for the 2026-11-20 production 500: `deleteProject` filtered
+   * `project_revisions` by `owner_id`, a column that table does not have. The old fake
+   * matched the statement by its prefix, ignored the parameters and returned success, so the
+   * suite passed while every real delete failed. These two tests pin both halves of the fix —
+   * the repository no longer names the column, and the fake now refuses statements that do.
+   */
+  it('issues only columns that exist on the tables it touches', async () => {
+    const db = fakeD1()
+    await createProject(db, asProject({ id: 'p-cols' }))
+
+    // fake-d1 throws "no such column" for an unknown column, so reaching the assertions at all
+    // proves every statement `deleteProject` issued named real columns.
+    await expect(deleteProject(db, 'p-cols')).resolves.toBeUndefined()
+    expect(db.rows).toHaveLength(0)
+  })
+
+  it('leaves revisions alone when the project is not owned by this caller', async () => {
+    // Seeded with a foreign owner, which `createProject` would never produce: the row exists
+    // but is not ours, so the delete must be a no-op rather than an error or a half-delete.
+    const db = fakeD1({
+      seed: [{
+        id: 'p-foreign', owner_id: 'someone-else', name: 'Bukan Punya Kita',
+        slug: 'asing', prompt: 'x', status: 'draft', document: '{}',
+        revision: 1, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      }],
+    })
+
+    await deleteProject(db, 'p-foreign')
+
+    expect(db.rows.some((r) => r.id === 'p-foreign')).toBe(true)
+  })
 })

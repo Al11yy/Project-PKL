@@ -25,6 +25,48 @@ interface Statement {
   params: unknown[]
 }
 
+/**
+ * The columns each table actually has, copied from `migrations/0001_init.sql` and
+ * `0002_project_revision_counter.sql`. The fake checks every column named in a WHERE clause
+ * against this, because that is exactly the class of bug the fake must not agree with: a
+ * repository statement naming a column the table does not have passed silently here and
+ * returned a 500 from real D1 in production (see `deleteProject`, fixed 2026-11-20). Real
+ * SQLite rejects such a statement with "no such column"; so does the fake now.
+ */
+const KNOWN_COLUMNS: Record<string, readonly string[]> = {
+  projects: [
+    'id', 'owner_id', 'name', 'slug', 'prompt', 'status', 'document',
+    'revision', 'created_at', 'updated_at',
+  ],
+  project_revisions: [
+    'id', 'project_id', 'revision', 'instruction', 'document', 'created_at',
+  ],
+}
+
+/**
+ * Rejects a statement whose WHERE clause names a column the target table does not have.
+ * Only comparison positions are inspected (`col = ?` and friends), which covers every
+ * statement this repository issues; ORDER BY and LIMIT clauses carry no comparisons.
+ */
+function checkColumns(normalized: string): void {
+  // Case-insensitive on purpose: the repository writes its SQL keywords in UPPERCASE
+  // (`DELETE FROM ... WHERE ...`), so a lowercase match silently skipped every statement —
+  // which is how the first version of this guard failed to catch the bug it was written for.
+  const whereIndex = normalized.toLowerCase().indexOf(' where ')
+  if (whereIndex === -1) return
+
+  const tableName = /from ([a-z_]+)/i.exec(normalized)?.[1]
+  const columns = tableName === undefined ? undefined : KNOWN_COLUMNS[tableName.toLowerCase()]
+  if (columns === undefined) return
+
+  const clause = normalized.slice(whereIndex)
+  for (const match of clause.matchAll(/([a-z_][a-z0-9_]*)\s*(?:=|!=|<>|<|>|>=|<=)/g)) {
+    if (!columns.includes(match[1])) {
+      throw new Error(`fake-d1: no such column: ${match[1]} (in ${tableName})`)
+    }
+  }
+}
+
 class FakeStatement {
   readonly params: unknown[] = []
 
@@ -43,6 +85,8 @@ class FakeStatement {
 function execute(table: Row[], statement: Statement, uniqueIds: Set<string>): Row[] {
   const { sql, params } = statement
   const normalized = sql.replace(/\s+/g, ' ').trim()
+
+  checkColumns(normalized)
 
   // SELECT ... FROM projects WHERE owner_id = ? ORDER BY ... LIMIT ? OFFSET ?
   if (normalized.startsWith('SELECT id, name, slug, status, document') && normalized.includes('LIMIT ? OFFSET ?')) {
@@ -119,8 +163,11 @@ function execute(table: Row[], statement: Statement, uniqueIds: Set<string>): Ro
   if (normalized.startsWith('DELETE FROM projects')) {
     const [id, owner] = params as [string, string]
     const index = table.findIndex((r) => r.id === id && r.owner_id === owner)
-    if (index !== -1) table.splice(index, 1)
-    return []
+    if (index === -1) return []
+    table.splice(index, 1)
+    // `changes` is how the repository learns whether the row was owned and therefore whether
+    // the revision cleanup may run, so it has to report the real count, not a bare success.
+    return [{ changes: 1 }]
   }
 
   throw new Error(`fake-d1: statement not modelled: ${normalized.slice(0, 120)}`)
@@ -158,8 +205,8 @@ export function fakeD1(options: FakeD1Options = {}): D1Database & { rows: Row[] 
           },
           all: async <T>() => ({ results: execute(table, statement, uniqueIds) as T[], success: true }),
           run: async () => {
-            execute(table, statement, uniqueIds)
-            return { success: true }
+            const result = execute(table, statement, uniqueIds)
+            return { success: true, meta: { changes: Number(result?.[0]?.changes ?? 0) } }
           },
         }
       },

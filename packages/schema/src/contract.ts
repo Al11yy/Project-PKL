@@ -5,7 +5,8 @@ import { z } from 'zod'
  *
  * Everything else derives from this array:
  *   - `BlockKind` (TypeScript) is `(typeof WHITELISTED_KINDS)[number]`
- *   - the Zod `kind` enum is `z.enum(WHITELISTED_KINDS)`
+ *   - the Zod `kind` check is `z.string().refine(isWhitelistedKind)` — a refine, not
+ *     `z.enum`, so the error can name the rejected value (see the note on `kind` below)
  *   - the renderer switch in Preview.tsx must handle every member or fail to compile
  *
  * Adding a kind therefore means one edit here plus a renderer branch plus seed data — and

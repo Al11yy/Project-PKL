@@ -6,12 +6,15 @@ import { PromptRow } from './components/shell/PromptRow'
 import { Rail } from './components/shell/Rail'
 import { TopBar } from './components/shell/TopBar'
 import { Toasts } from './components/ui/Toasts'
+import { EmptyState } from './components/views/EmptyState'
 import { SchemaView } from './components/views/SchemaView'
 import { useBuilder } from './store/useBuilder'
 
 export default function App() {
   const view = useBuilder((s) => s.view)
   const loadProjects = useBuilder((s) => s.loadProjects)
+  const loaded = useBuilder((s) => s.loaded)
+  const project = useBuilder((s) => s.activeProject())
 
   /**
    * Load the server's projects once, on mount.
@@ -26,6 +29,25 @@ export default function App() {
   useEffect(() => {
     void loadProjects()
   }, [loadProjects])
+
+  /**
+   * Every view below reads `project.status`, `.screens`, `.name` and so on. With no project
+   * there is nothing to read, so the shell is replaced rather than rendered empty — this is
+   * the guard that was missing, and without it an empty server response blanked the page.
+   *
+   * It waits for `loaded` so the seed's first paint is not thrown away for a spinner, and it
+   * covers the load-error case too: if the server never answers, `project` is still the seed,
+   * so this only triggers once a response has genuinely said "zero projects".
+   */
+  if (loaded && project === undefined) {
+    return (
+      <div className="flex h-full overflow-hidden bg-ground">
+        <Rail />
+        <EmptyState />
+        <Toasts />
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full overflow-hidden bg-ground">

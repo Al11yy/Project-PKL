@@ -28,7 +28,10 @@ export function Inspector() {
   const selectedBlockId = useBuilder((s) => s.selectedBlockId)
   const updateBlock = useBuilder((s) => s.updateBlock)
 
-  if (!open) return null
+  // Both guards are needed: with no project there is no node tree to inspect, and `App` only
+  // reaches this component once a project exists — the check keeps the component honest on its
+  // own rather than depending on that ordering.
+  if (!open || project === undefined) return null
 
   const block = project.screens
     .flatMap((sc) => sc.blocks)

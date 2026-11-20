@@ -1,6 +1,14 @@
 /// <reference types="vitest" />
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+
+/**
+ * `loadEnv` is needed for the proxy target because Vite only injects `.env` values into
+ * `import.meta.env` for client code — `process.env` in this config file stays empty. Without
+ * it, `VITE_ORCHESTRATOR_URL` in `apps/editor/.env.local` would be silently ignored and the
+ * proxy would quietly keep pointing at the local orchestrator.
+ */
+const env = loadEnv('development', process.cwd(), '')
 
 export default defineConfig({
   plugins: [react()],
@@ -21,15 +29,22 @@ export default defineConfig({
      */
     proxy: {
       '/api': {
-        target: process.env.VITE_ORCHESTRATOR_URL ?? 'http://localhost:5181',
+        target: env.VITE_ORCHESTRATOR_URL ?? 'http://localhost:5181',
         changeOrigin: true,
       },
     },
   },
   test: {
-    // The contract's tests moved with it to `packages/schema`. The editor has no tests of
-    // its own; `passWithNoTests` keeps `npm test` green here rather than failing on an
-    // empty suite, which would train everyone to ignore a red test command.
+    /**
+     * `node`, not `jsdom`: the editor's suites (`store/useBuilder.test.ts` and
+     * `lib/api.test.ts`) exercise the store and the HTTP client, both of whose network seams
+     * are mocked. Nothing here mounts a component, so there is no DOM to provide. A component
+     * test would have to switch this to `jsdom` — and would then be the first thing to want
+     * `@testing-library/react`, which is deliberately not installed yet.
+     *
+     * `passWithNoTests` stays as a guard: the contract's own tests live in `packages/schema`,
+     * so a future move could empty this suite and `npm test` should not go red for it.
+     */
     environment: 'node',
     include: ['src/**/*.test.ts'],
     passWithNoTests: true,

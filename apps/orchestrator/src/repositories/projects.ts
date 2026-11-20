@@ -231,10 +231,22 @@ export async function currentRevision(db: D1Database, id: string): Promise<numbe
  * foreign keys unless `PRAGMA foreign_keys = ON` is set per connection — and a cascade that
  * only sometimes fires is worse than one that never does, since it leaves orphans on the path
  * nobody tested.
+ *
+ * Ownership is checked against `projects`, the only table that has an `owner_id` column (see
+ * `0001_init.sql`). `project_revisions` is keyed by `project_id` alone, so filtering it by
+ * `owner_id` was a bug: SQLite rejects the unknown column and every delete returned 500. The
+ * ownership guard belongs in the first statement, and the revision delete is safe only because
+ * reaching it proves the project belongs to this owner.
  */
 export async function deleteProject(db: D1Database, id: string): Promise<void> {
-  await db.batch([
-    db.prepare('DELETE FROM project_revisions WHERE project_id = ? AND owner_id = ?').bind(id, PLACEHOLDER_OWNER),
-    db.prepare('DELETE FROM projects WHERE id = ? AND owner_id = ?').bind(id, PLACEHOLDER_OWNER),
-  ])
+  // Removing the owned `projects` row is what actually authorizes the revision cleanup, so it
+  // runs first and its result decides whether the second delete is allowed to touch anything.
+  const owned = await db
+    .prepare('DELETE FROM projects WHERE id = ? AND owner_id = ?')
+    .bind(id, PLACEHOLDER_OWNER)
+    .run()
+
+  if ((owned.meta?.changes ?? 0) === 0) return
+
+  await db.prepare('DELETE FROM project_revisions WHERE project_id = ?').bind(id).run()
 }

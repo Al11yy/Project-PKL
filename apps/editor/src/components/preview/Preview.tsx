@@ -16,6 +16,10 @@ export function Preview() {
   const generation = useBuilder((s) => s.generation)
   const publish = useBuilder((s) => s.publish)
 
+  // No project, nothing to preview. `App` renders the empty state instead of this component in
+  // that case; the early return keeps the render path safe if that ever changes.
+  if (project === undefined) return null
+
   const screen = project.screens[0]
   const live = project.status === 'live'
 

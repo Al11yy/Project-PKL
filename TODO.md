@@ -23,11 +23,11 @@ selanjutnya. Setiap butir merujuk file nyata di repo ini.
       placeholder, sehingga setiap pemanggil melihat data yang sama. Selama ini kosong,
       `/api/v1/projects` **terbuka untuk siapa pun** dan aplikasi tidak boleh dipublikasikan.
       Ini satu-satunya butir yang membuka blokir provisioning dan publish.
-- [ ] **Pasang `RAKIT_SHARED_TOKEN` di production.** Secret ini belum di-set pada Worker,
-      jadi penjagaan token belum aktif di sana meski kodenya sudah siap:
-      `npx wrangler secret put RAKIT_SHARED_TOKEN` dari `apps/orchestrator/`.
-      `/generate` dan `/revise` sudah aman karena `FEATURE_GENERATE_ENABLED = "false"`,
-      tetapi `/projects` masih dapat dibaca tanpa kredensial.
+- [x] **Pasang `RAKIT_SHARED_TOKEN` di production.** Selesai 2026-11-20 dan diverifikasi
+      end-to-end: `/projects` tanpa token **401**, dengan token **200**, token salah **401**,
+      `/generate` tetap **503** `FEATURE_DISABLED`, `/health` terbuka. Secret berlaku seketika
+      tanpa deploy ulang. Ingat: ini pengekangan, bukan autentikasi — token tetap tertanam
+      dalam bundle browser lewat `VITE_*`.
 
 ## P1 — Inti MVP
 
@@ -48,6 +48,10 @@ selanjutnya. Setiap butir merujuk file nyata di repo ini.
       belum ada tombol "Coba lagi" yang memakai ulang prompt terakhir.
 - [ ] **Log biaya LLM.** Catat token per permintaan supaya pemakaian bisa dilihat terhadap
       tagihan LLM-Kita yang sebenarnya.
+- [ ] **Konfirmasi hapus proyek masih `window.confirm`.** `Rail.tsx` memakai dialog bawaan
+      browser karena itu penjaga termurah yang tidak bisa dilewati salah klik. Gantinya dialog
+      milik aplikasi sendiri ketika sudah ada komponen modal — jangan sampai penghapusan yang
+      tidak bisa dibatalkan bergantung pada dialog yang bisa diblokir browser.
 - [ ] **Audit aksesibilitas.** `:focus-visible` sudah ditata, tetapi belum ada uji keyboard
       menyeluruh maupun uji pembaca layar pada `Pipeline`, `Inspector`, dan `Preview`.
 
@@ -64,23 +68,23 @@ selanjutnya. Setiap butir merujuk file nyata di repo ini.
 
 ## Utang teknis yang diketahui
 
-Diverifikasi terhadap kode pada 2026-11-18. Butir yang ternyata sudah beres dihapus, bukan
-dibiarkan menggantung.
+Diverifikasi terhadap kode pada 2026-11-18; diperbarui 2026-11-20. Butir yang ternyata sudah
+beres dihapus, bukan dibiarkan menggantung.
 
 | Item | Lokasi | Dampak |
 |------|--------|--------|
 | Pesan tahap generasi memakai timer, bukan progres server | `useBuilder.ts` (`setTimeout`) | Progres yang ditampilkan tidak mencerminkan pekerjaan nyata |
 | Tidak ada router — navigasi lewat state | `App.tsx` | Tidak ada URL yang bisa dibagikan; reload kehilangan konteks |
-| `hasGenerated` di-set tapi tidak pernah dibaca | `useBuilder.ts:68,111,211,255` | Dead state; aman dihapus, bukan bug perilaku |
+| `hasGenerated` di-set tapi tidak pernah dibaca | `useBuilder.ts:68,135,295,339` | Dead state; aman dihapus, bukan bug perilaku |
 | `.shots/` berisi harness ad-hoc | `apps/editor/.shots/` | Skrip verifikasi tidak terdaftar di `package.json` |
-| Atlas kedaluwarsa (2026-07-15) | `.amanah/atlas/` | Mempredasi orchestrator dan `packages/schema`; kode menang bila berbeda |
-| URL remote masih menunjuk repo lama | `.git/config` | GitHub mengalihkan ke `Al11yy/Rakit.ai`; perbarui agar tidak bergantung redirect |
+| Dokumen Confluence hanya sinkron ke depan | `scripts/sync-confluence.mjs` | Suntingan langsung di Confluence hilang pada sync berikutnya; ubah markdown di repo |
 
 ## Cara memakai daftar ini
 
 1. Kerjakan P0 dari atas. Auth membuka blokir P1; tanpa itu provisioning hanya membakar kuota.
 2. Sebelum menyentuh kode fitur, baca `.amanah/atlas/*.md` dan blueprint terkait
-   (`CLAUDE.md` mewajibkan ini). Ingat atlas masih basi — verifikasi ke kode.
+   (`CLAUDE.md` mewajibkan ini). Atlas sudah diselaraskan dengan kode pada 2026-11-18, tetapi
+kode tetap menang bila keduanya berbeda.
 3. Jangan menambahkan butir yang memuat koin, ledger, saldo, atau Midtrans. Bila muncul
    dorongan ke sana, baca ulang aturan #2 di `CLAUDE.md` lebih dulu.
 4. Jalankan `npm test` dan `npm run typecheck` sebelum commit. Jalur uang tidak lagi ada,

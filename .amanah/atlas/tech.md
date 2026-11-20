@@ -17,7 +17,7 @@
 | Contract | Zod `^4.6.7` | **Built** | `packages/schema/src/` |
 | Platform DB | Cloudflare D1 (`rakit-db`) | **Built** | `migrations/`, `repositories/projects.ts` |
 | AI engine | API LLM-Kita, OpenAI-compatible | **Built** | `llm/openai-compatible-client.ts` |
-| Tests | Vitest `^5.1.0` | **Built** | 237 tests across 14 files |
+| Tests | Vitest `^5.1.0` | **Built** | 262 tests across 16 files |
 | E2E harness | Playwright `^1.65.1` | **Built** | `apps/editor/.shots/` |
 | User project DB/compute | D1 + Workers, one per project | **Not built** | `runPublish` is simulated |
 | DDL generation | `packages/generator/` | **Not built** | does not exist |
@@ -65,7 +65,8 @@ advisory is not a defensible default. `npm audit --omit=dev` reports 0 vulnerabi
 
 ```
 Rail ─┬─ Editor  → Pipeline → PromptRow → Preview ──┬─ Inspector (free edits)
-      └─ Skema   → SchemaView                       └─ Toasts
+      ├─ Skema   → SchemaView                       └─ Toasts
+      └─ none    → EmptyState  (zero projects)
                           │
                     useBuilder (Zustand)
                    projects · view · run states

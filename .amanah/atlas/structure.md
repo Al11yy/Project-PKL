@@ -26,7 +26,7 @@ D:\PKL\Project
 │   │   │   │   ├── shell/           TopBar, Pipeline, PromptRow, Rail
 │   │   │   │   ├── preview/         Preview — the JSON→component mapper
 │   │   │   │   ├── inspector/       Inspector — the free visual editor
-│   │   │   │   ├── views/           SchemaView  (LedgerView deleted)
+│   │   │   │   ├── views/           SchemaView, EmptyState  (LedgerView deleted)
 │   │   │   │   └── ui/              Button, Icons, Toasts
 │   │   │   ├── lib/
 │   │   │   │   ├── api.ts           HTTP client to the orchestrator
@@ -91,10 +91,19 @@ call actions directly:
 
 ```ts
 const view = useBuilder((s) => s.view)
-const activeProject = useBuilder((s) => s.activeProject)
+const project = useBuilder((s) => s.activeProject())
 ```
 
 Computed selectors are **called**, not read, so derived values never become cacheable state.
+
+### `activeProject()` returns `Project | undefined`
+
+`undefined` is a real state, not a defensive flourish: a fresh account has zero projects. The
+shell (`Rail` + `TopBar` + views) needs a project to render, so `App.tsx` replaces it with
+`EmptyState` once `loaded && project === undefined` — a state that only occurs after the server
+has genuinely answered "zero projects", so the seed's first paint is not thrown away. Every
+component that reads `.status`, `.screens` or `.name` also guards on `undefined` on its own,
+rather than relying on `App` having done it.
 
 ### Block-kind mapper
 
