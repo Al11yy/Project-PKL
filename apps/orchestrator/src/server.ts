@@ -1,7 +1,12 @@
 import { serve } from '@hono/node-server'
 import { ConfigError, loadLlmConfig, loadServerConfig, type Env } from './config'
 import { createNodeHandler } from './node-handler'
-import { loadLocalBindings, type LocalBindings } from './local-bindings'
+import {
+  loadLocalBindings,
+  loadWranglerVars,
+  withConfigVars,
+  type LocalBindings,
+} from './local-bindings'
 import { logger } from './logger'
 
 /**
@@ -25,7 +30,22 @@ async function main(): Promise<void> {
   let llmConfig
   let serverConfig
 
-  const baseEnv = process.env as Env
+  /**
+   * `[vars]` are read first, before anything is validated.
+   *
+   * `process.env` alone is not the whole configuration: `wrangler.toml` supplies
+   * `LLM_KITA_BASE_URL`, the model and the token limits, and none of them are repeated in a
+   * `.env` file. Validating against `process.env` by itself therefore rejected a correctly
+   * configured machine with "Missing required environment variable LLM_KITA_BASE_URL" — a
+   * [vars] entry being reported as absent, which reads as a broken `.env` rather than as the
+   * layering bug it was.
+   *
+   * Reading it here, and not inside `loadLocalBindings`, is what keeps the fail-fast property:
+   * a missing *secret* still exits before miniflare boots and takes a lock on the database.
+   * `readConfig` is a plain file read — no workerd, no handle to release.
+   */
+  const configVars = await loadWranglerVars()
+  const baseEnv = withConfigVars(process.env as Env, configVars)
 
   try {
     llmConfig = loadLlmConfig(baseEnv)
@@ -44,7 +64,7 @@ async function main(): Promise<void> {
    */
   let bindings: LocalBindings
   try {
-    bindings = await loadLocalBindings(baseEnv)
+    bindings = await loadLocalBindings(baseEnv, { configVars })
   } catch (error) {
     console.error(`[bindings] ${(error as Error).message}`)
     process.exit(1)

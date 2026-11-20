@@ -17,9 +17,16 @@ import { logger } from './logger'
  * `wrangler dev` uses, so the two entry points read and write one database instead of drifting
  * apart into two that look identical and disagree.
  *
- * Only bindings are taken from the proxy. String configuration stays whatever `process.env`
- * says, because `dev:all` forwards a specific, deliberate set of variables and a `.env` file
- * sitting next to `wrangler.toml` must not quietly override them.
+ * The proxy is not the whole environment. String configuration comes from three places, and they
+ * are layered in a stated order rather than left to whichever one happens to run first:
+ *
+ *   `process.env` (what `dev:all` forwards from `.env`)  >  the proxy  >  `wrangler.toml [vars]`
+ *
+ * `[vars]` are the deployed Worker's; they are the fallback that makes `LLM_KITA_BASE_URL` and
+ * the model reach this path at all, without repeating their values in a second place. The proxy
+ * sits above them because it merges `.dev.vars`, which `wrangler dev` treats as the more specific
+ * store. `process.env` sits above both because `dev:all` forwards a deliberate, per-invocation
+ * set and a stale file must not override it. See `readWranglerVars` and `mergeBindings`.
  */
 
 /** The slice of `PlatformProxy` this module uses, structurally typed to avoid importing wrangler. */
@@ -60,21 +67,111 @@ const wranglerProxy: ProxyFactory = async (options) => {
 /** `wrangler.toml` sits one level above `src/`, next to this app's `package.json`. */
 export const WRANGLER_CONFIG_PATH = fileURLToPath(new URL('../wrangler.toml', import.meta.url))
 
+/** Reads the `[vars]` block alone, without starting miniflare. Injected in tests. */
+export type VarsReader = (configPath: string) => Promise<Record<string, string>>
+
 /**
- * Merges the proxy's bindings under `base`, with `base` winning.
+ * Reads `[vars]` from `wrangler.toml` with wrangler's own reader.
  *
- * Spreading alone would be wrong: `{ ...proxyEnv, ...base }` is fine only as long as `base` has
- * no key that is present-but-`undefined`. Explicitly skipping `undefined` values makes the
- * precedence a stated rule rather than an accident of which keys `process.env` happens to carry.
+ * The point is to *not* repeat the values: `LLM_KITA_BASE_URL`, `LLM_KITA_MODEL` and the token
+ * limits are already written down once, for the deployed Worker. Parsing the TOML here instead
+ * of asking wrangler would be a second, hand-written parser that nobody keeps in step.
+ *
+ * `readConfig` is synchronous and does not touch miniflare, which is what makes it usable for
+ * the fail-fast check that must happen *before* the proxy takes a lock on the database. It also
+ * deliberately does not merge `.dev.vars` — that file is read by the proxy and by nothing else.
+ *
+ * Only strings are returned. A `[vars]` entry holding JSON cannot be an `Env` value, so it is
+ * dropped rather than stringified into something the config loader would then trust.
  */
-export function mergeBindings(base: Env, proxyEnv: Record<string, unknown>): Env {
-  const merged: Record<string, unknown> = { ...proxyEnv }
+const wranglerVars: VarsReader = async (configPath) => {
+  const { unstable_readConfig } = await import('wrangler')
+  const config = unstable_readConfig({ config: configPath }, { hideWarnings: true })
+
+  const vars: Record<string, string> = {}
+  for (const [key, value] of Object.entries(config.vars ?? {})) {
+    if (typeof value === 'string') vars[key] = value
+  }
+  return vars
+}
+
+/**
+ * The lowest-precedence configuration layer: `wrangler.toml`'s `[vars]`.
+ *
+ * Never throws. `[vars]` are a fallback, so a file that cannot be read must not stop the dev
+ * server from starting — whatever is genuinely missing will still be named by `loadLlmConfig`,
+ * which is a better error than "could not parse a file you did not edit".
+ */
+export async function loadWranglerVars(
+  configPath: string = WRANGLER_CONFIG_PATH,
+  read: VarsReader = wranglerVars,
+): Promise<Record<string, string>> {
+  try {
+    return await read(configPath)
+  } catch (error) {
+    logger.warn('bindings.config_vars_failed', { configPath, error: String(error) })
+    return {}
+  }
+}
+
+/**
+ * Lays `base` over a lower layer, with one deliberate exception: a blank string loses.
+ *
+ * The shipped templates write placeholders such as `LLM_KITA_BASE_URL=` with nothing after the
+ * `=`. If that blank won, the `[vars]` value beside it would be masked and `loadLlmConfig` would
+ * report the variable as missing — the same confusion this layering exists to remove, only
+ * harder to see, because the value is visibly present in `wrangler.toml`.
+ *
+ * The exception is *narrow on purpose*: it only applies when the lower layer actually has a
+ * non-blank string for that key. So an empty `RAKIT_SHARED_TOKEN`, which the docs describe as
+ * "leave it empty to run with the API open", keeps that meaning instead of quietly adopting a
+ * token from somewhere else.
+ *
+ * Explicitly skipping `undefined` makes the rest of the precedence a stated rule rather than an
+ * accident of which keys `process.env` happens to carry — `process.env` casts are full of them.
+ */
+export function withConfigVars(base: Env, lower: Record<string, unknown> = {}): Env {
+  const merged: Record<string, unknown> = { ...lower }
 
   for (const [key, value] of Object.entries(base)) {
-    if (value !== undefined) merged[key] = value
+    if (value === undefined) continue
+
+    const fallback = lower[key]
+    if (
+      typeof value === 'string' &&
+      value.trim() === '' &&
+      typeof fallback === 'string' &&
+      fallback.trim() !== ''
+    ) {
+      continue
+    }
+
+    merged[key] = value
   }
 
   return merged as Env
+}
+
+/**
+ * Merges the three configuration layers, lowest precedence first: `[vars]`, then the proxy's
+ * bindings, then `base`.
+ *
+ * The proxy sits above `[vars]` because it is the more specific store: it merges `.dev.vars`
+ * over the same `[vars]`, so it is what `wrangler dev` would serve. `base` sits above both
+ * because `dev:all` forwards a deliberate, per-invocation set of values from the root `.env`.
+ */
+export function mergeBindings(
+  base: Env,
+  proxyEnv: Record<string, unknown>,
+  configVars: Record<string, string> = {},
+): Env {
+  const lower: Record<string, unknown> = { ...configVars }
+
+  for (const [key, value] of Object.entries(proxyEnv)) {
+    if (value !== undefined) lower[key] = value
+  }
+
+  return withConfigVars(base, lower)
 }
 
 /**
@@ -96,6 +193,21 @@ function once(dispose: () => Promise<void>): () => Promise<void> {
   }
 }
 
+export interface LocalBindingsOptions {
+  /** Injected in tests so the suite does not start miniflare. */
+  factory?: ProxyFactory
+  configPath?: string
+  /**
+   * The `[vars]` layer, normally the result of `loadWranglerVars`.
+   *
+   * Passed in rather than read here because the caller has to read it *before* this function
+   * runs: configuration is validated before the proxy starts, and that validation must already
+   * see `[vars]` — otherwise a value that `wrangler.toml` supplies is reported missing. See
+   * `server.ts`.
+   */
+  configVars?: Record<string, string>
+}
+
 /**
  * Loads the local bindings and returns the env the Node server should serve with.
  *
@@ -105,13 +217,12 @@ function once(dispose: () => Promise<void>): () => Promise<void> {
  */
 export async function loadLocalBindings(
   base: Env,
-  factory: ProxyFactory = wranglerProxy,
-  configPath: string = WRANGLER_CONFIG_PATH,
+  { factory = wranglerProxy, configPath = WRANGLER_CONFIG_PATH, configVars = {} }: LocalBindingsOptions = {},
 ): Promise<LocalBindings> {
   const proxy = await factory({ configPath })
 
   return {
-    env: mergeBindings(base, proxy.env),
+    env: mergeBindings(base, proxy.env, configVars),
     dispose: once(proxy.dispose),
   }
 }

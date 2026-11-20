@@ -12,6 +12,10 @@
 # IMPORTANT: `npm run dev:all` does NOT read this file. That script starts `server.ts`, a plain
 # Node process, and reads the root `.env` instead. This file only matters when you run
 # `wrangler dev` yourself.
+#
+# `server.ts` does, however, read the [vars] block of `wrangler.toml` — a database binding and
+# `LLM_KITA_BASE_URL` are not things you should have to write down twice. Only the values below
+# that are genuinely secrets, or that differ from `wrangler.toml`, belong in the root `.env`.
 
 LLM_KITA_API_KEY=isi-api-key-dari-llm-kita-com
 

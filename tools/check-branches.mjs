@@ -6,9 +6,42 @@
  * "unchanged revision" into a false failure when this was run by hand.
  */
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 const EDITOR = 'http://localhost:5180'
+
+/**
+ * The shared token, read the same way `dev-all` reads it.
+ *
+ * The editor sends `X-Rakit-Token` on every request, and the orchestrator rejects requests
+ * without it whenever one is configured. This script talked to the editor directly and sent no
+ * header, so every case returned 401 and the failure looked like a broken revision check rather
+ * than a missing token.
+ *
+ * Kept a best-effort read rather than a hard requirement: with no token configured the API is
+ * open on localhost and an empty header is simply ignored.
+ */
+function readToken() {
+  if (process.env.RAKIT_SHARED_TOKEN !== undefined) return process.env.RAKIT_SHARED_TOKEN
+  try {
+    const text = readFileSync(new URL('../.env', import.meta.url), 'utf8')
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('RAKIT_SHARED_TOKEN=')) continue
+      return trimmed.slice('RAKIT_SHARED_TOKEN='.length).replace(/^["']|["']$/g, '').trim()
+    }
+  } catch {
+    // No `.env` — the API is open locally, or the operator set the variable directly.
+  }
+  return ''
+}
+
+const TOKEN = readToken()
+const headers = {
+  'Content-Type': 'application/json',
+  ...(TOKEN === '' ? {} : { 'X-Rakit-Token': TOKEN }),
+}
 
 const CASES = [
   ['hilangkan layar', 422, 'REVISION_DROPPED_DATA'],
@@ -32,7 +65,7 @@ async function restartFake() {
 async function generate() {
   const res = await fetch(`${EDITOR}/api/v1/generate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ prompt: 'buat sistem kasir klinik dengan data pasien dan laporan' }),
   })
   const body = await res.json()
@@ -45,7 +78,7 @@ for (const [instruction, wantStatus, wantCode] of CASES) {
   const project = await generate()
   const res = await fetch(`${EDITOR}/api/v1/revise`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ project, instruction }),
   })
   const body = await res.json()

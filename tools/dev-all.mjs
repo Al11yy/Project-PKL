@@ -6,9 +6,10 @@
  *   2. @rakit/orchestrator  — the real API on :5181, pointed at the fake
  *   3. @rakit/editor        — Vite on :5180, proxying /api to the orchestrator
  *
- * If `LLM_KITA_API_KEY` is already set in the environment it is left alone, so the same command
- * runs against the real provider when a key is present. The fake is a fallback for a machine
- * that has no key, not a replacement for testing against the model.
+ * If `LLM_KITA_API_KEY` is already set — in the environment *or* in the root `.env`, which is
+ * where `.env.example` tells you to put it — it is left alone, so the same command runs against
+ * the real provider when a key is present. The fake is a fallback for a machine that has no key,
+ * not a replacement for testing against the model.
  *
  * Ctrl-C stops all three. Output is prefixed so it is clear which process is talking.
  */
@@ -77,7 +78,17 @@ const generateEnabled =
  */
 const featureFlag = generateEnabled === 'true' ? 'true' : 'false'
 
-const usingFake = !process.env.LLM_KITA_API_KEY
+/**
+ * The key comes from either place, so both are checked.
+ *
+ * Reading only `process.env` here used to mean that filling `LLM_KITA_API_KEY` in the root
+ * `.env` — which is exactly what `.env.example` tells you to do — still selected the fake
+ * provider, and then overwrote the real key with `fake` on the way in. The harness looked
+ * configured, ran, and quietly never called the model.
+ */
+const llmApiKey = process.env.LLM_KITA_API_KEY ?? rootEnv.LLM_KITA_API_KEY ?? ''
+
+const usingFake = llmApiKey === ''
 
 const children = []
 
@@ -131,7 +142,7 @@ start(
           LLM_KITA_BASE_URL: 'http://localhost:5197/v1',
           LLM_KITA_MODEL: 'fake-model',
         }
-      : {}),
+      : { LLM_KITA_API_KEY: llmApiKey }),
     // Passed through `process.env` because `npm run dev` starts `server.ts`, a plain Node
     // process that never reads `.dev.vars` — that file belongs to `wrangler dev` alone.
     RAKIT_SHARED_TOKEN: sharedToken,
