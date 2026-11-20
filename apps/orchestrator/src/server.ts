@@ -1,6 +1,7 @@
 import { serve } from '@hono/node-server'
 import { ConfigError, loadLlmConfig, loadServerConfig, type Env } from './config'
 import { createNodeHandler } from './node-handler'
+import { loadLocalBindings, type LocalBindings } from './local-bindings'
 import { logger } from './logger'
 
 /**
@@ -14,16 +15,21 @@ import { logger } from './logger'
  *
  * `@hono/node-server` adapts a Node `IncomingMessage` into the `Request`/`Response` pair Hono
  * expects, so the handlers here are byte-for-byte the ones the Worker runs.
+ *
+ * The one thing the two runtimes do not share is the *bindings*. `process.env` can supply the
+ * string variables, but `DB` is a workerd object and Node has no such thing — so this entry
+ * point asks wrangler's `getPlatformProxy` for it. That is what makes `npm run dev:all` able to
+ * persist anything at all; see `local-bindings.ts`.
  */
-function main(): void {
+async function main(): Promise<void> {
   let llmConfig
   let serverConfig
 
-  const env = process.env as Env
+  const baseEnv = process.env as Env
 
   try {
-    llmConfig = loadLlmConfig(env)
-    serverConfig = loadServerConfig(env)
+    llmConfig = loadLlmConfig(baseEnv)
+    serverConfig = loadServerConfig(baseEnv)
   } catch (error) {
     if (error instanceof ConfigError) {
       console.error(`[config] ${error.message}`)
@@ -31,6 +37,20 @@ function main(): void {
     }
     throw error
   }
+
+  /**
+   * Configuration is validated *before* the proxy is started, so a missing API key exits
+   * immediately instead of after miniflare has booted and taken a lock on the local database.
+   */
+  let bindings: LocalBindings
+  try {
+    bindings = await loadLocalBindings(baseEnv)
+  } catch (error) {
+    console.error(`[bindings] ${(error as Error).message}`)
+    process.exit(1)
+  }
+
+  const env = bindings.env
 
   /**
    * Built by `createNodeHandler`, which closes over `env`.
@@ -53,18 +73,45 @@ function main(): void {
   })
 
   /**
-   * Graceful shutdown: stop accepting connections, then exit. The hard-exit timer is the
-   * backstop — without it a hung keep-alive connection would hold the process open forever
-   * and a deploy would have to be killed.
+   * Graceful shutdown: stop accepting connections, release the database, then exit.
+   *
+   * The dispose is awaited *before* `process.exit` on purpose. Exiting first would leave
+   * miniflare's SQLite handle open, and on Windows an open handle keeps
+   * `.wrangler/state/v3/d1/*.sqlite` locked — `tsx watch` then reloads into `SQLITE_BUSY` and
+   * the next start fails for a reason that looks nothing like a restart. `dispose` is
+   * idempotent, so the hard-exit timer firing after a normal close is harmless.
+   *
+   * The timer itself is the backstop: without it a hung keep-alive connection would hold the
+   * process open forever and a deploy would have to be killed.
    */
   const shutdown = (signal: string): void => {
     logger.info('server.shutdown', { signal })
-    server.close(() => process.exit(0))
-    setTimeout(() => process.exit(1), 5_000).unref()
+
+    const forceExit = setTimeout(() => process.exit(1), 5_000)
+    forceExit.unref()
+
+    server.close(() => {
+      void bindings.dispose().finally(() => {
+        clearTimeout(forceExit)
+        process.exit(0)
+      })
+    })
   }
 
   process.on('SIGTERM', () => shutdown('SIGTERM'))
   process.on('SIGINT', () => shutdown('SIGINT'))
+
+  /**
+   * `tsx watch` reloads by sending SIGTERM, which the handler above covers. These two are for
+   * the paths that handler cannot reach: an unhandled rejection or a thrown error mid-request
+   * would otherwise exit with the proxy still holding the database file.
+   */
+  for (const event of ['uncaughtException', 'unhandledRejection'] as const) {
+    process.on(event, (error: unknown) => {
+      logger.error('server.crashed', { event, error: String(error) })
+      void bindings.dispose().finally(() => process.exit(1))
+    })
+  }
 }
 
-main()
+void main()

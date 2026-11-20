@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createNodeHandler } from './node-handler'
+import { fakeD1 } from './testing/fake-d1'
+import { clientProject } from './testing/fixtures'
 import type { Env } from './config'
 
 /**
@@ -73,5 +75,50 @@ describe('createNodeHandler', () => {
   it('fails at construction when the LLM config is unusable', () => {
     // The dev server should refuse to start rather than serve an API that 500s on every call.
     expect(() => createNodeHandler({} as Env)).toThrow()
+  })
+
+  it('can persist once the D1 binding is supplied', async () => {
+    /**
+     * The regression guard for `dev:all` having no database.
+     *
+     * Before `local-bindings.ts`, the Node path's env was `process.env`, which cannot carry a
+     * workerd binding. `requireDb` therefore threw on every persistence route and this POST
+     * answered 503 `DATABASE_UNAVAILABLE` — while generation itself returned 200, so the editor
+     * showed "Generate gagal" for what was really a save failure.
+     *
+     * A `fakeD1` is passed here rather than a real one: the point under test is that a binding
+     * put on the env reaches the repository, not that miniflare works.
+     */
+    const db = fakeD1()
+    const handler = createNodeHandler({ ...ENV, DB: db })
+
+    const response = await handler(
+      new Request('http://localhost/api/v1/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Rakit-Token': TOKEN },
+        body: JSON.stringify(clientProject()),
+      }),
+    )
+
+    expect(response.status).toBe(201)
+    expect(db.rows).toHaveLength(1)
+  })
+
+  it('reports DATABASE_UNAVAILABLE when the binding is genuinely missing', async () => {
+    /**
+     * Kept deliberately: the 503 is correct for a Worker deployed without its binding. What
+     * changed is that the Node dev path no longer lands here by default.
+     */
+    const response = await handlerFor()(
+      new Request('http://localhost/api/v1/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Rakit-Token': TOKEN },
+        body: JSON.stringify(clientProject()),
+      }),
+    )
+
+    expect(response.status).toBe(503)
+    const body = (await response.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('DATABASE_UNAVAILABLE')
   })
 })
