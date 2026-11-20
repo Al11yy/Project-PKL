@@ -74,6 +74,30 @@ Codes that exist in `apps/orchestrator/src/errors.ts`:
 `UNAUTHORIZED`, `DATABASE_UNAVAILABLE`, `FEATURE_DISABLED`, `CONTRACT_VIOLATION`,
 `INVALID_SCHEMA`, `REVISION_DROPPED_DATA`.
 
+`LLM_TIMEOUT`, `LLM_RATE_LIMITED`, `LLM_MALFORMED` and `LLM_UNAVAILABLE` come from
+`llm/errors.ts` and carry their own status via `toApiError()`.
+
+How `toApiError()` maps a class to a status — the order matters:
+
+| Class | Status | `code` |
+|-------|--------|--------|
+| `ApiErrorException` | as constructed | as constructed |
+| `LlmError` (any subclass) | the error's own `httpStatus` | its own `code` |
+| `ModelOutputError` (extends `ContractError`) | **422** | `INVALID_SCHEMA` |
+| `RevisionConflictError` (extends `ContractError`) | **422** | `REVISION_DROPPED_DATA` |
+| bare `ContractError` | 500 | `CONTRACT_VIOLATION` |
+| anything else | 500 | `INTERNAL_ERROR` |
+
+`ModelOutputError` is checked before bare `ContractError` because it is a subclass. Its 422 is
+deliberate: the request was fine, the model's answer was unusable, and retrying may succeed.
+LLM statuses in full: `LlmTimeoutError` 504, `LlmRateLimitError` 503, `LlmProviderError` and
+`LlmAuthError` both 502 `LLM_UNAVAILABLE`, `LlmMalformedError` 502.
+
+Note that a **provider 401/403 is reported as 502 `LLM_UNAVAILABLE`, not a client 401** — it is
+*our* API key that was rejected, and the user can do nothing about it. Every `LlmError` response
+also carries `details: { charged: false }`; that field exists so clients written against the
+eventual ledger need no shape change, and it is not an accounting record.
+
 Never leak stack traces, SQL errors, or provider error bodies to the client.
 
 The editor's toast tones (`'ok' | 'warn' | 'danger'`) mirror this and distinguish user-facing
@@ -105,7 +129,11 @@ failure from success.
   **containment, not authentication** — do not describe it as auth, and do not let it survive
   the arrival of real auth.
 - Keep `FEATURE_GENERATE_ENABLED` off until auth exists. It is the only guard a client cannot
-  read or forge.
+  read or forge. Only the exact string `"true"` opens it; the deployed Worker ships `"false"`.
+- Let `CORS_ALLOWED_ORIGINS` **fail closed**. An unset or empty value allows nothing, by
+  design — a forgotten variable must not silently open the API. Matching is exact, or a
+  `*.sub.example.com` wildcard; never `startsWith`/`includes`, which would admit
+  `https://evil-example.com`.
 - Rate-limit generation endpoints per user once auth lands.
 - Validate and cap prompt length to control token spend. The UI rejects prompts under 12
   characters, but that is a demo affordance, not a security control.

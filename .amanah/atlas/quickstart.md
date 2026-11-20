@@ -204,6 +204,20 @@ Rules: no secret is committed (`.gitignore` covers `.env` and `.env.*`); `wrangl
 committed, so secrets go in with `wrangler secret put`, never in the file. `VITE_*` is **not**
 secret — Vite inlines it into the browser bundle.
 
+Which env file a variable must live in depends on how you started the server, and mixing them
+up is the usual "why is my flag ignored?" bug:
+
+| Runtime | Reads |
+|---------|-------|
+| `npm run dev` / `server.ts` (Node) | `process.env` only. **`.dev.vars` is never read here.** |
+| `npm run dev:all` | root `.env`, but only the four keys it forwards: `RAKIT_SHARED_TOKEN`, `FEATURE_GENERATE_ENABLED`, plus `LLM_KITA_*` when a key is set. Other keys stay put. |
+| `npm run dev:worker` / `wrangler dev` | `.dev.vars` only |
+| Deployed Worker | `wrangler secret put` / `[vars]` in `wrangler.toml` |
+
+`dev:all` normalises the flag to `'true' | 'false'` and **defaults to `'false'`** when `.env` is
+silent, so local development exercises the same configuration as the deployed Worker. If
+generation 503s locally, that default is the reason — not a broken route.
+
 ### Production checklist
 
 ```bash

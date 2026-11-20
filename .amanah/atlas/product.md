@@ -1,7 +1,8 @@
 # AI-First App Builder for Indonesia — Product Overview
 
 > **Source of truth**: `prd_ai_first_app_builder.md` (Draft v1.0) for the intended product,
-> and `apps/` + `packages/` for what actually runs. **Regenerated from code on 2026-11-18.**
+> `PRODUCT.md` for the design brief, and `apps/` + `packages/` for what actually runs.
+> **Regenerated from code on 2026-11-18; re-verified against the code on 2026-11-20.**
 > Where this file and the code disagree, the code wins — then fix this file.
 
 ## What Is This?
@@ -49,6 +50,16 @@ from being safely exposable.
 - **Visual Fallback Editor**: Click-to-edit UI for text, accent colour, and copy.
   `components/inspector/Inspector.tsx`. It edits the local block tree and never consults a
   cost — it must stay free and free-feeling.
+- **Accent**: `warn | action | ok`. Accepted **only** on `stat` blocks — `ACCENT_KINDS` is a
+  one-member set, and a stray accent anywhere else is a contract error (`auditAccents()` reports
+  the offenders). This is a real rule, not styling advice.
+- **Revision**: A re-generation applied to an existing project. `reviseProject` **preserves the
+  project id** — the id identifies the row and the history that belongs to it — and increments
+  a counter in D1 (`0002_project_revision_counter.sql`). A revision that drops screens or
+  columns the user never asked to remove is rejected as `REVISION_DROPPED_DATA` (422).
+- **Refusal**: The model declining a prompt, returned as `{ refusal: { reason } }` inside the
+  `llmEnvelopeSchema` union. A refusal is the model **behaving correctly** and must not be
+  routed down the malformed-output path, which would report a working answer as a failure.
 - **Context Manager**: The PRD's backend store for conversation history + live schema.
   **Does not exist.** The nearest thing is the `Project` object in the Zustand store, which
   holds schema and screens together — the drift risk the Context Manager was meant to prevent.
@@ -100,3 +111,10 @@ open until the orchestrator can measure actual provider cost.
    and comments are English.
 8. **The API is gated, not authenticated.** Do not describe the shared token as auth, and do
    not publicise the Worker while auth is missing.
+9. **`FEATURE_GENERATE_ENABLED` must be exactly `"true"`.** `"1"`, `"yes"` and `"TRUE"` all
+   leave `/generate` and `/revise` returning 503 `FEATURE_DISABLED`; the flag is off by default,
+   including when unset. `TODO.md` keeps the deployed Worker at `"false"` on purpose — flipping
+   it before auth exists hands anyone who finds the URL a working API key.
+10. **Auth is P0, and absent — not merely unstarted.** `TODO.md` ranks it as the one item that
+   unblocks provisioning and publish. `owner_id` is still `PLACEHOLDER_OWNER = 'local-user'`
+   in `repositories/projects.ts`, so every caller currently sees the same rows.

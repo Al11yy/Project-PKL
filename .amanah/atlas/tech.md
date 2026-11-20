@@ -106,7 +106,16 @@ Not authentication. Two layers, both documented in `CLAUDE.md`:
 - `RAKIT_SHARED_TOKEN` — required as `X-Rakit-Token` on everything except `/health` and the
   CORS preflight. Containment only: Vite inlines the editor's copy into the browser bundle.
 
-`CORS_ALLOWED_ORIGINS` is a browser rule, not access control — `curl` ignores it.
+`CORS_ALLOWED_ORIGINS` is a browser rule, not access control — `curl` ignores it. It also
+**fails closed**: an unset or empty value allows *no* origin, so a forgotten variable cannot
+silently open the API. Matching is exact, or a `*.sub.example.com` wildcard with a required
+leading dot (so `evilrakit-editor.pages.dev` cannot match `*.rakit-editor.pages.dev`).
+`Allow-Credentials` is deliberately absent — nothing is cookie-authenticated — which is why the
+allowed-headers list must be exact rather than `*`.
+
+`/health` is registered *before* the token middleware on purpose: it reports only
+`{ status: 'ok', llmConfigured: bool }`, spends no tokens, and stays reachable so an operator can
+tell "server is down" from "my token is wrong" without holding the token.
 
 ## Development Commands
 
